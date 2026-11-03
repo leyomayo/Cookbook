@@ -4,14 +4,14 @@
  * A recipe is stored as a single plain object:
  *
  *   {
- *     id:          "r_…"            unique id (string)
- *     schemaVersion: 1               bump when the shape changes, migrate in normalizeRecipe()
+ *     id:          "r_…"            unique id (string), kept in export files
+ *     schemaVersion: 2               bump when the shape changes, migrate in normalizeRecipe()
  *     title:       "Pancakes"
  *     mealType:    "breakfast"       one of MEAL_TYPES
  *     prepMinutes: 10                number or null
  *     cookMinutes: 15                number or null
  *     servings:    4                 number or null
- *     tags:        ["sweet", "quick"]
+ *     tags:        ["Sweet", "Quick"]  names from the tag list (see js/tags.js)
  *     ingredients: [Ingredient, …]   in display order
  *     steps:       [Step, …]         in cooking order
  *     createdAt / updatedAt:         ms timestamps
@@ -35,10 +35,15 @@
  * The future fields are stored now (as null / empty) so that adding those
  * features later needs no data migration, and editing a recipe in this
  * version keeps whatever values they already hold.
+ *
+ * Schema history:
+ *   1  first version. Tags were lower-cased, typed as comma-separated text.
+ *   2  tags are names from a persistent tag list: first letter capitalized,
+ *      no duplicates that differ only by case.
  */
 
 const Model = (() => {
-  const SCHEMA_VERSION = 1;
+  const SCHEMA_VERSION = 2;
 
   // Order here is the order shown in the filter and the form.
   const MEAL_TYPES = [
@@ -90,6 +95,21 @@ const Model = (() => {
   }
 
   /**
+   * Tidy a tag name: no commas (they used to separate tags), single spaces,
+   * and only the first letter capitalized. The rest is left as typed.
+   * "  comfort  Food " → "Comfort  Food" → "Comfort Food"
+   */
+  function cleanTag(name) {
+    const t = String(name ?? '').replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+    return t ? t.charAt(0).toLocaleUpperCase() + t.slice(1) : '';
+  }
+
+  /** Case-insensitive key used to compare tags: "Comfort food" → "comfort food". */
+  function tagKey(name) {
+    return cleanTag(name).toLowerCase();
+  }
+
+  /**
    * Fill in any missing fields and fix types. Run on everything read from
    * storage, so older or hand-edited records never break the screens.
    * This is also where future schema migrations go.
@@ -102,7 +122,16 @@ const Model = (() => {
     r.prepMinutes = toCount(r.prepMinutes);
     r.cookMinutes = toCount(r.cookMinutes);
     r.servings = toCount(r.servings);
-    r.tags = Array.isArray(r.tags) ? r.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+    // Schema 1 → 2: tags may be an array or comma-separated text. Split on
+    // commas, tidy each name, and merge names that differ only by case
+    // (the first spelling wins). Matching names to the tag list's spelling
+    // happens in db.js, which can read the list.
+    const rawTags = typeof r.tags === 'string' ? [r.tags] : Array.isArray(r.tags) ? r.tags : [];
+    const seenTags = new Set();
+    r.tags = rawTags
+      .flatMap((t) => String(t).split(','))
+      .map(cleanTag)
+      .filter((t) => t && !seenTags.has(t.toLowerCase()) && seenTags.add(t.toLowerCase()));
     r.ingredients = (Array.isArray(r.ingredients) ? r.ingredients : []).map((i) => ({
       ...newIngredient(),
       ...i,
@@ -114,15 +143,6 @@ const Model = (() => {
       ingredientIds: Array.isArray(s.ingredientIds) ? s.ingredientIds : [],
     }));
     return r;
-  }
-
-  /** "sweet, Quick ,sweet" → ["sweet", "quick"] (lower-case, no duplicates). */
-  function parseTags(text) {
-    const seen = new Set();
-    return String(text)
-      .split(',')
-      .map((t) => t.trim().toLowerCase())
-      .filter((t) => t && !seen.has(t) && seen.add(t));
   }
 
   /** 75 → "1 h 15 min", 20 → "20 min", null → "". */
@@ -147,7 +167,8 @@ const Model = (() => {
     newIngredient,
     newStep,
     normalizeRecipe,
-    parseTags,
+    cleanTag,
+    tagKey,
     formatMinutes,
     mealLabel,
   };
