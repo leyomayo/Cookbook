@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- viewport-fit=cover lets the layout extend under the iPhone notch;
+       the CSS uses safe-area insets to keep content clear of it. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cookbook</title>
+  <meta name="description" content="A personal cookbook that keeps every recipe on this device.">
+
+  <!-- Installability: manifest for all browsers, apple-* tags for iOS Safari. -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#b4532a" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1c1917" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Cookbook">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <!-- Left slot: back button on inner screens, empty on the list. -->
+    <div class="header-side" id="header-left"></div>
+    <h1 class="app-title" id="header-title">Cookbook</h1>
+    <!-- Right slot: the screen's primary action (Add, Edit, Save). -->
+    <div class="header-side header-side-right" id="header-right"></div>
+  </header>
+
+  <!-- Each screen renders into this element. See js/app.js. -->
+  <main id="view" class="view" tabindex="-1"></main>
+
+  <!-- Classic scripts (not modules) in dependency order, so the app also
+       works when opened straight from the file system during development. -->
+  <script src="js/model.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
