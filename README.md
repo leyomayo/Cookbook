@@ -10,9 +10,52 @@ IndexedDB storage. No servers, no accounts, no cloud services.
 ## What's in this version
 
 - **Recipe list** with a meal type filter (All, Breakfast, Lunch, Snack, Dinner, Other)
+  and a tag filter. Pick one or more tags; recipes must have all of them to show.
 - **Add / edit form**: title, meal type, prep time, cook time, servings, tags,
   an ingredient list, and numbered directions you can reorder
 - **Recipe detail** page. On iPad the ingredients and directions sit side by side.
+- **Tag list** that starts with 46 common tags and grows as you add your own
+- **Backup, sharing and import** of recipe files
+
+## Tags
+
+- Tap into the **Tags** field to see 15 suggestions, most used first, then A to Z.
+  Tap a suggestion to add it. Tap an added tag (✕) to remove it.
+- Type to search the whole list. Your text can appear anywhere in the tag,
+  in any case ("ick" finds "Chicken").
+- Press **Return** to add the tag that matches your text exactly (ignoring
+  case). If there's no exact match, a new tag is created and saved to the list.
+  Only the first letter is capitalized; the rest stays as you typed it.
+- Tags stay in the list even when no recipe uses them. The tag filter on the
+  recipe list only shows tags that at least one recipe uses.
+
+## Backup, sharing and import
+
+Open **Backup** (top left of the recipe list).
+
+- **Export all recipes** makes one backup file with every recipe and your tag list.
+- **Share recipe** (at the bottom of a recipe) makes a file with that recipe
+  and every recipe it links to, including recipes those link to.
+- On iPhone and iPad both open the **share sheet**. Choose **Save to Files**
+  to keep a backup, or AirDrop, Messages or Mail to send it. On a computer the
+  file downloads.
+- **Choose file…** imports a backup or a shared recipe. To import a file
+  someone sent you, save it to Files first, then pick it here.
+
+When importing:
+
+- If anything in the file is invalid, you see an error and nothing changes.
+- If a recipe in the file is already in your cookbook (same id), you choose
+  **Ignore** (skip it), **Overwrite** (replace yours) or **Keep both** (import it
+  as a separate recipe). You can apply the same answer to the rest of the file.
+  **Cancel import** stops without changing anything.
+- If a different recipe has the same name (ignoring case), the imported one is
+  renamed with "-new" on the end, and a warning tells you.
+- Links between imported recipes are updated when a recipe gets a new id.
+- Imported tags join your tag list.
+
+**Make a backup now and then.** Recipes live only on the device, so a backup
+in Files (or iCloud Drive) is the only copy if the app is deleted.
 
 ## Turn on GitHub Pages
 
@@ -40,8 +83,9 @@ Open the app once while you're online so it can save its files for offline use.
 > **About storage:** Safari keeps each Home Screen app's data separate from the
 > regular Safari tab. Recipes you add in the Home Screen app appear only there,
 > and recipes you add in a Safari tab appear only in that tab. Deleting the
-> Home Screen icon may also delete its recipes. Export and backup aren't built
-> yet.
+> Home Screen icon may also delete its recipes, so keep a backup (see above).
+> To move recipes from a Safari tab into the Home Screen app, export a backup
+> in the tab and import it in the app.
 
 ## Updating the app
 
@@ -54,6 +98,8 @@ When you change any file:
    and uses it the next time you open the app.
 
 Recipes aren't affected by updates, because they live in IndexedDB, not in the cache.
+When the data shape changes, the update converts existing recipes the first
+time it opens (see "Data model" below).
 
 ## Running it locally
 
@@ -73,9 +119,11 @@ index.html             App shell: header, main view, script tags
 manifest.webmanifest   Name, icons and display mode for installing
 sw.js                  Service worker: offline caching of the app files
 css/styles.css         All styles. Mobile first, with a wider layout for iPad.
-js/model.js            Recipe data shape, defaults and helpers
-js/db.js               IndexedDB storage (get, save, delete)
-js/app.js              Screens and hash-based navigation (#/, #/recipe/<id>, #/new, #/edit/<id>)
+js/model.js            Recipe data shape, defaults, schema upgrades (normalizeRecipe)
+js/tags.js             Starter tags, tag list helpers, the tag editor
+js/transfer.js         Export/share/import: file format, checks, conflict handling
+js/db.js               IndexedDB storage: recipes and the tag list
+js/app.js              Screens and hash-based navigation (#/, #/recipe/<id>, #/new, #/edit/<id>, #/backup)
 icons/                 Home Screen and manifest icons
 ```
 
@@ -93,3 +141,33 @@ data migration:
 Every ingredient and step has a stable `id`, so these links keep working when
 you reorder the lists. Editing a recipe keeps whatever values these fields
 already hold.
+
+Schema changes go in `normalizeRecipe()` in `js/model.js`, which runs on every
+recipe read from storage or from a file.
+
+- **Schema 1**: first version.
+- **Schema 2**: tags are names from the tag list. Updating converts existing
+  tags (including comma-separated text), capitalizes the first letter, and
+  merges tags that differ only by case.
+
+The tag list is a separate IndexedDB store (`tags`), keyed by the lower-case name.
+
+### File format
+
+Export files are JSON:
+
+```json
+{
+  "format": "cookbook-recipes",
+  "formatVersion": 1,
+  "kind": "backup",
+  "exportedAt": "2026-11-03T18:00:00.000Z",
+  "recipes": [ { "id": "r_…", "title": "…", "ingredients": [ … ], "steps": [ … ] } ],
+  "tags": [ "Chicken", "Weeknight" ]
+}
+```
+
+`kind` is `backup` (every recipe, plus the whole tag list in `tags`) or `share`
+(one recipe followed by the recipes it links to). Recipe, ingredient and step
+ids are kept as they are. Files from a newer `formatVersion` or schema are
+rejected with a message to update the app.

@@ -8,6 +8,7 @@
  *   #/recipe/<id>    recipe detail
  *   #/new            add recipe form
  *   #/edit/<id>      edit recipe form
+ *   #/backup         export and import files
  *
  * Each screen is a function that fills <main id="view"> and sets the header.
  * User text is always passed through esc() before it goes into HTML.
@@ -46,15 +47,20 @@
 
   /**
    * Fill the header. `back` is a hash to return to (shows a back button);
+   * `left` is { label, href } for a plain link on the left instead;
    * `action` is { label, onClick } for the button on the right.
    */
-  function setHeader({ title, back, action }) {
+  function setHeader({ title, back, left, action }) {
     headerTitle.textContent = title;
     document.title = title === 'Cookbook' ? 'Cookbook' : `${title} · Cookbook`;
 
-    headerLeft.innerHTML = back
-      ? `<a class="header-btn" href="${esc(back)}" aria-label="Back"><span aria-hidden="true">‹</span> Back</a>`
-      : '';
+    if (back) {
+      headerLeft.innerHTML = `<a class="header-btn" href="${esc(back)}" aria-label="Back"><span aria-hidden="true">‹</span> Back</a>`;
+    } else if (left) {
+      headerLeft.innerHTML = `<a class="header-btn" href="${esc(left.href)}">${esc(left.label)}</a>`;
+    } else {
+      headerLeft.innerHTML = '';
+    }
 
     headerRight.innerHTML = '';
     if (action) {
@@ -67,7 +73,23 @@
     }
   }
 
-  /** "Prep 10 min · Cook 20 min" style summary for cards. */
+  /** A short message that fades away, e.g. "Backup saved". */
+  function toast(message) {
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.setAttribute('role', 'status');
+    el.textContent = message;
+    document.body.append(el);
+    setTimeout(() => el.remove(), 3000);
+  }
+
+  function tagBubbles(tags) {
+    return tags.length
+      ? `<span class="tags">${tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</span>`
+      : '';
+  }
+
+  /** Total of prep and cook time, for cards and the detail page. */
   function totalTime(r) {
     if (r.prepMinutes === null && r.cookMinutes === null) return '';
     return Model.formatMinutes((r.prepMinutes || 0) + (r.cookMinutes || 0));
@@ -78,12 +100,25 @@
   /* ------------------------------------------------------------------ */
 
   async function showList() {
-    setHeader({ title: 'Cookbook', action: { label: '+ Add', onClick: () => go('#/new') } });
+    setHeader({
+      title: 'Cookbook',
+      left: { label: 'Backup', href: '#/backup' },
+      action: { label: '+ Add', onClick: () => go('#/new') },
+    });
 
     const recipes = await DB.getAllRecipes();
     recipes.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
 
     let filter = prefs.get('mealFilter', 'all');
+
+    // Tag filter: only tags used by at least one recipe, most used first.
+    // You can pick several; a recipe must have all of them to show.
+    const counts = Tags.usageCounts(recipes);
+    const usedTags = Tags.sortByUsage(
+      [...new Map(recipes.flatMap((r) => r.tags).map((t) => [t.toLowerCase(), t])).values()], counts);
+    let tagFilter;
+    try { tagFilter = JSON.parse(prefs.get('tagFilter', '[]')); } catch { tagFilter = []; }
+    tagFilter = (Array.isArray(tagFilter) ? tagFilter : []).filter((k) => counts.has(k));
 
     // Filter chips: "All" plus one per meal type, each with a count.
     const chips = [{ value: 'all', label: 'All' }, ...Model.MEAL_TYPES]
@@ -95,28 +130,44 @@
       })
       .join('');
 
+    const tagChips = usedTags.map((t) =>
+      `<button type="button" class="chip chip-tag" data-tag="${esc(t.toLowerCase())}">${esc(t)}</button>`).join('');
+
     view.innerHTML = `
-      <nav class="chips" aria-label="Filter by meal type">${chips}</nav>
-      <ul class="recipe-grid" id="recipe-grid"></ul>
+      <div id="list-screen">
+        <nav class="chips" aria-label="Filter by meal type">${chips}</nav>
+        ${usedTags.length ? `<nav class="chips chips-tags" aria-label="Filter by tag">${tagChips}</nav>` : ''}
+        <ul class="recipe-grid" id="recipe-grid"></ul>
+      </div>
     `;
 
+    const screen = view.querySelector('#list-screen');
     const grid = view.querySelector('#recipe-grid');
 
     function renderCards() {
-      // Highlight the active chip.
-      view.querySelectorAll('.chip').forEach((chip) => {
+      // Highlight the active chips.
+      view.querySelectorAll('[data-filter]').forEach((chip) => {
         chip.setAttribute('aria-pressed', String(chip.dataset.filter === filter));
       });
+      view.querySelectorAll('[data-tag]').forEach((chip) => {
+        chip.setAttribute('aria-pressed', String(tagFilter.includes(chip.dataset.tag)));
+      });
 
-      const shown = filter === 'all' ? recipes : recipes.filter((r) => r.mealType === filter);
+      const shown = recipes
+        .filter((r) => filter === 'all' || r.mealType === filter)
+        .filter((r) => tagFilter.every((k) => r.tags.some((t) => t.toLowerCase() === k)));
 
       if (!shown.length) {
+        let message = '<p>Your cookbook is empty.</p>';
+        if (recipes.length && tagFilter.length) message = '<p>No recipes match these filters.</p>';
+        else if (recipes.length) message = `<p>No ${esc(Model.mealLabel(filter).toLowerCase())} recipes yet.</p>`;
         grid.innerHTML = `
           <li class="empty">
-            ${recipes.length
-              ? `<p>No ${esc(Model.mealLabel(filter).toLowerCase())} recipes yet.</p>`
-              : '<p>Your cookbook is empty.</p>'}
-            <a class="btn btn-primary" href="#/new">Add a recipe</a>
+            ${message}
+            ${tagFilter.length
+              ? '<button type="button" class="btn btn-secondary" data-clear-tags>Clear tag filter</button>'
+              : '<a class="btn btn-primary" href="#/new">Add a recipe</a>'}
+            ${recipes.length ? '' : '<p><a href="#/backup">Import recipes from a file</a></p>'}
           </li>`;
         return;
       }
@@ -133,17 +184,27 @@
               <span class="badge badge-${r.mealType}">${esc(Model.mealLabel(r.mealType))}</span>
               <span class="card-title">${esc(r.title || 'Untitled')}</span>
               ${meta ? `<span class="card-meta">${meta}</span>` : ''}
-              ${r.tags.length ? `<span class="tags">${r.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : ''}
+              ${tagBubbles(r.tags)}
             </a>
           </li>`;
       }).join('');
     }
 
-    view.querySelector('.chips').addEventListener('click', (e) => {
-      const chip = e.target.closest('.chip');
-      if (!chip) return;
-      filter = chip.dataset.filter;
+    screen.addEventListener('click', (e) => {
+      const meal = e.target.closest('[data-filter]');
+      const tag = e.target.closest('[data-tag]');
+      if (meal) {
+        filter = meal.dataset.filter;
+      } else if (tag) {
+        const key = tag.dataset.tag;
+        tagFilter = tagFilter.includes(key) ? tagFilter.filter((k) => k !== key) : [...tagFilter, key];
+      } else if (e.target.closest('[data-clear-tags]')) {
+        tagFilter = [];
+      } else {
+        return;
+      }
       prefs.set('mealFilter', filter);
+      prefs.set('tagFilter', JSON.stringify(tagFilter));
       renderCards();
     });
 
@@ -155,8 +216,14 @@
   /* ------------------------------------------------------------------ */
 
   async function showDetail(id) {
-    const r = await DB.getRecipe(id);
+    const all = await DB.getAllRecipes();
+    const r = all.find((x) => x.id === id);
     if (!r) return showNotFound();
+
+    // Prepare the share file now: Safari only opens the share sheet if it's
+    // called straight from the tap, with no waiting in between.
+    const shareData = Transfer.share(r.id, all);
+    const linked = shareData.recipes.length - 1;
 
     setHeader({
       title: r.title || 'Recipe',
@@ -177,7 +244,7 @@
         <div class="detail-head">
           <span class="badge badge-${r.mealType}">${esc(Model.mealLabel(r.mealType))}</span>
           <h2 class="detail-title">${esc(r.title || 'Untitled')}</h2>
-          ${r.tags.length ? `<div class="tags">${r.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+          ${tagBubbles(r.tags)}
           ${facts.length ? `
             <dl class="facts">
               ${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')}
@@ -208,10 +275,17 @@
         </div>
 
         <div class="detail-actions">
+          <button type="button" class="btn btn-secondary" id="share-btn">Share recipe</button>
           <button type="button" class="btn btn-danger" id="delete-btn">Delete recipe</button>
+          ${linked ? `<p class="muted">Sharing includes ${linked} linked recipe${linked === 1 ? '' : 's'}.</p>` : ''}
         </div>
       </article>
     `;
+
+    view.querySelector('#share-btn').addEventListener('click', () => {
+      Transfer.deliver(Transfer.shareFileName(r), shareData, r.title)
+        .then((result) => result === 'downloaded' && toast('Recipe file downloaded.'));
+    });
 
     view.querySelector('#delete-btn').addEventListener('click', async () => {
       if (!confirm(`Delete “${r.title || 'Untitled'}”? This can't be undone.`)) return;
@@ -232,7 +306,9 @@
    * future linking features survive edits made in this version.
    */
   async function showForm(id) {
-    const existing = id ? await DB.getRecipe(id) : null;
+    const [existing, allRecipes, tagNames] = await Promise.all([
+      id ? DB.getRecipe(id) : null, DB.getAllRecipes(), DB.getTagNames(),
+    ]);
     if (id && !existing) return showNotFound();
 
     const draft = existing || Model.newRecipe();
@@ -281,11 +357,10 @@
             </label>
           </div>
 
-          <label class="field">
-            <span class="field-label">Tags <span class="muted">(comma separated)</span></span>
-            <input name="tags" type="text" autocomplete="off" autocapitalize="none"
-                   value="${esc(draft.tags.join(', '))}" placeholder="quick, vegetarian">
-          </label>
+          <div class="field">
+            <span class="field-label">Tags</span>
+            <div id="tag-editor"></div>
+          </div>
         </section>
 
         <section class="panel">
@@ -310,6 +385,19 @@
     const form = view.querySelector('#recipe-form');
     const ingredientRows = form.querySelector('#ingredient-rows');
     const stepRows = form.querySelector('#step-rows');
+
+    // Tag bubbles. New tags are added to the tag list as soon as you create them.
+    const tagList = [...tagNames];
+    const tagEditor = Tags.mountEditor(form.querySelector('#tag-editor'), {
+      tags: draft.tags,
+      getList: () => tagList,
+      counts: Tags.usageCounts(allRecipes),
+      onCreate: async (name) => {
+        const saved = await DB.addTag(name);
+        if (!tagList.includes(saved)) tagList.push(saved);
+        return saved;
+      },
+    });
 
     function renderIngredients() {
       ingredientRows.innerHTML = draft.ingredients.map((ing, i) => `
@@ -357,7 +445,7 @@
       draft.prepMinutes = data.get('prepMinutes');
       draft.cookMinutes = data.get('cookMinutes');
       draft.servings = data.get('servings');
-      draft.tags = Model.parseTags(data.get('tags'));
+      draft.tags = tagEditor.getTags();
 
       // Rows are matched to draft objects by position (they're rendered in
       // draft order), so extra fields like recipeId are kept.
@@ -440,6 +528,7 @@
     });
 
     async function save() {
+      await tagEditor.flush(); // keep a tag that was typed but not yet added
       syncFromForm();
       if (!draft.title) {
         const title = form.elements.title;
@@ -469,6 +558,146 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* Screen: backup (export and import)                                  */
+  /* ------------------------------------------------------------------ */
+
+  async function showBackup() {
+    setHeader({ title: 'Backup', back: '#/' });
+
+    const [recipes, tagNames] = await Promise.all([DB.getAllRecipes(), DB.getTagNames()]);
+    // Prepared now so the tap can open the share sheet straight away.
+    const backupData = Transfer.backup(recipes, tagNames);
+    const count = recipes.length;
+
+    view.innerHTML = `
+      <div class="stack">
+        <section class="panel">
+          <h3>Export</h3>
+          <p>Save all ${count} recipe${count === 1 ? '' : 's'} and your tag list in one backup file.
+             On iPhone and iPad, choose <strong>Save to Files</strong> in the share sheet.</p>
+          <button type="button" class="btn btn-primary" id="export-btn" ${count ? '' : 'disabled'}>Export all recipes</button>
+        </section>
+
+        <section class="panel">
+          <h3>Import</h3>
+          <p>Add recipes from a Cookbook backup or a shared recipe file. If anything in
+             the file is invalid, nothing is imported.</p>
+          <label class="btn btn-secondary file-btn">
+            Choose file…
+            <input type="file" id="import-input" class="visually-hidden"
+                   accept=".json,application/json,text/plain">
+          </label>
+          <div id="import-result" aria-live="polite"></div>
+        </section>
+      </div>
+    `;
+
+    view.querySelector('#export-btn').addEventListener('click', () => {
+      Transfer.deliver(Transfer.backupFileName(), backupData, 'Cookbook backup')
+        .then((result) => result === 'downloaded' && toast('Backup downloaded.'));
+    });
+
+    const input = view.querySelector('#import-input');
+    const result = view.querySelector('#import-result');
+
+    input.addEventListener('change', async () => {
+      const file = input.files[0];
+      input.value = ''; // so choosing the same file again still triggers
+      if (!file) return;
+      result.innerHTML = '<p class="muted">Checking file…</p>';
+
+      try {
+        const parsed = Transfer.parse(await Transfer.readFile(file));
+        const plan = await Transfer.plan(parsed.recipes, await DB.getAllRecipes(), askConflict);
+        await DB.importRecipes(plan.recipes, parsed.tags);
+        result.innerHTML = importReport(plan);
+      } catch (err) {
+        console.error(err);
+        const message = err.name === 'ImportError' ? err.message
+          : err.name === 'ImportCancelled' ? 'Import cancelled.'
+          : `Something went wrong: ${err.message || err}`;
+        result.innerHTML = `
+          <div class="notice notice-error" role="alert">
+            <p>${esc(message)}</p>
+            <p>Nothing was changed.</p>
+          </div>`;
+      }
+    });
+  }
+
+  /** What happened, plus any warnings, after a successful import. */
+  function importReport({ summary, warnings }) {
+    const parts = [
+      summary.added && `${summary.added} added`,
+      summary.overwritten && `${summary.overwritten} overwritten`,
+      summary.keptBoth && `${summary.keptBoth} added as a second copy`,
+      summary.ignored && `${summary.ignored} ignored`,
+    ].filter(Boolean);
+    return `
+      <div class="notice notice-ok">
+        <p><strong>Import finished:</strong> ${esc(parts.join(', ') || 'nothing to import')}.</p>
+        <a class="btn btn-secondary" href="#/">View recipes</a>
+      </div>
+      ${warnings.length ? `
+        <div class="notice notice-warn">
+          <p><strong>Renamed:</strong></p>
+          <ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>
+        </div>` : ''}`;
+  }
+
+  /**
+   * Ask what to do with a recipe from the file whose id is already on this
+   * device. Resolves to { choice, applyToAll }; rejects if the import is
+   * cancelled (Cancel button or Escape), in which case nothing is saved.
+   */
+  function askConflict(fileRecipe, deviceRecipe, remaining) {
+    const date = (ms) => new Date(ms).toLocaleDateString(undefined, { dateStyle: 'medium' });
+    return new Promise((resolve, reject) => {
+      const dialog = document.createElement('dialog');
+      dialog.className = 'dialog';
+      dialog.innerHTML = `
+        <form method="dialog">
+          <h3>Already in your cookbook</h3>
+          <p>“${esc(fileRecipe.title)}” in the file is the same recipe as
+             “${esc(deviceRecipe.title)}” on this device.</p>
+          <p class="muted">On this device: updated ${date(deviceRecipe.updatedAt)}<br>
+             In the file: updated ${date(fileRecipe.updatedAt)}</p>
+          <ul class="dialog-help muted">
+            <li><strong>Ignore</strong> keeps yours and skips the file's copy.</li>
+            <li><strong>Overwrite</strong> replaces yours with the file's copy.</li>
+            <li><strong>Keep both</strong> adds the file's copy as a separate recipe.</li>
+          </ul>
+          ${remaining ? `
+            <label class="check">
+              <input type="checkbox" name="all">
+              Do the same for the other ${remaining} matching recipe${remaining === 1 ? '' : 's'}
+            </label>` : ''}
+          <div class="dialog-actions">
+            <button class="btn btn-secondary" value="ignore">Ignore</button>
+            <button class="btn btn-secondary" value="overwrite">Overwrite</button>
+            <button class="btn btn-secondary" value="keep">Keep both</button>
+          </div>
+          <button class="btn-link" value="cancel">Cancel import</button>
+        </form>`;
+      document.body.append(dialog);
+
+      dialog.addEventListener('close', () => {
+        const choice = dialog.returnValue;
+        const applyToAll = Boolean(dialog.querySelector('[name="all"]')?.checked);
+        dialog.remove();
+        if (['ignore', 'overwrite', 'keep'].includes(choice)) {
+          resolve({ choice, applyToAll });
+        } else {
+          const err = new Error('Import cancelled.');
+          err.name = 'ImportCancelled';
+          reject(err);
+        }
+      });
+      dialog.showModal();
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Fallback screen                                                     */
   /* ------------------------------------------------------------------ */
 
@@ -495,6 +724,7 @@
       else if (page === 'recipe' && id) await showDetail(id);
       else if (page === 'new') await showForm(null);
       else if (page === 'edit' && id) await showForm(id);
+      else if (page === 'backup') await showBackup();
       else showNotFound();
     } catch (err) {
       console.error(err);

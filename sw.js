@@ -10,7 +10,7 @@
  * next launch of the app uses the fresh files.
  */
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = `cookbook-${CACHE_VERSION}`;
 
 // Relative paths, so this works under https://<user>.github.io/<repo>/.
@@ -19,6 +19,8 @@ const APP_FILES = [
   'index.html',
   'css/styles.css',
   'js/model.js',
+  'js/tags.js',
+  'js/transfer.js',
   'js/db.js',
   'js/app.js',
   'manifest.webmanifest',
