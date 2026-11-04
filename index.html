@@ -1,9 +1,5 @@
 <!doctype html>
-<!-- "booting" hides the header and screen until the first screen is drawn at
-     normal zoom (js/app.js removes it). On a cold launch iPadOS can paint a
-     frame before the viewport setting below applies, which looked like a
-     zoomed-in flash. CSS reveals the page anyway after 1.5 s as a fallback. -->
-<html lang="en" class="booting">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <!-- viewport-fit=cover lets the layout extend under the iPhone notch;
@@ -26,6 +22,16 @@
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
+  <!-- Launch logo: shown on a full launch, then faded out by js/app.js once
+       the first screen is ready (at least ~1 s). CSS fades it out after 4 s
+       as a fallback, and it never blocks taps.
+       TO CHANGE THE LOGO: replace the image file below (it's the app icon, so
+       a new icon set updates it too), or point src at another image. Any
+       square image works; it's shown at 120px with rounded corners. -->
+  <div class="splash" id="splash" aria-hidden="true">
+    <img class="splash-logo" src="icons/icon-512.png" alt="" width="120" height="120">
+  </div>
+
   <header class="app-header">
     <!-- Left slot: back button on inner screens, empty on the list. -->
     <div class="header-side" id="header-left"></div>
