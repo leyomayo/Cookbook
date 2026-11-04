@@ -272,11 +272,11 @@ async function suite(browser, tag, device) {
 
   await fresh.close();
 
-  // ---------- F. Offline with cache v4 ----------
+  // ---------- F. Offline with cache v5 ----------
   await page.goto(URL0); await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload(); await page.waitForSelector('.card');
   const keys = await page.evaluate(() => caches.keys());
-  ok(JSON.stringify(keys) === '["cookbook-v4"]', 'only cache cookbook-v4', keys);
+  ok(JSON.stringify(keys) === '["cookbook-v5"]', 'only cache cookbook-v5', keys);
   await ctx.setOffline(true);
   for (const h of ['#/', '#/tags', '#/backup', '#/new']) {
     await page.goto(URL0 + h); await page.reload();
@@ -381,7 +381,7 @@ async function linkTests(browser, tag, device, errors) {
   // ---- Remove a link: typed name stays ----
   await openForm('rP');
   await page.click('[data-action="unlink-ingredient"][data-index="2"]');
-  ok(await page.inputValue('.edit-row >> nth=2 >> .ing-name') === 'Chicken Broth' && (await page.$$('.link-info')).length === 1, T('Remove link keeps the typed name'));
+  ok(await page.inputValue('.edit-row >> nth=2 >> .ing-name') === 'Chicken Broth' && (await page.$$('.link-info')).length === 1, T('Unlink keeps the typed name'));
   await save();
   P = await get('rP');
   ok(P.ingredients[2].name === 'Chicken Broth' && P.ingredients[2].recipeId === null && P.ingredients[0].recipeId === 'rS', T('removed link saved as plain text'));
@@ -410,6 +410,10 @@ async function linkTests(browser, tag, device, errors) {
   ok(hashNow() === '#/recipe/rS?from=rP', T('link opens #/recipe/<id>'), hashNow());
   await page.click('.ing-link:has-text("dressing")'); await page.waitForSelector('.detail-title:has-text("Zesty Dressing")');
   ok(hashNow() === '#/recipe/rZ?from=rS&from=rP', T('links chain'), hashNow());
+  // The browser's own back (swipe back on iOS) works too: links are normal hash changes.
+  await page.goBack(); await page.waitForSelector('.detail-title:has-text("Tomato Sauce")');
+  ok(hashNow() === '#/recipe/rS?from=rP', T('browser back returns to the parent recipe'), hashNow());
+  await page.goForward(); await page.waitForSelector('.detail-title:has-text("Zesty Dressing")');
   await page.reload(); await page.waitForSelector('.detail-title:has-text("Zesty Dressing")');
   ok(await page.getAttribute('#header-left .header-btn', 'aria-label') === 'Back to Tomato Sauce', T('after a reload Back still names the recipe you came from'));
   await back();
@@ -496,7 +500,8 @@ async function linkTests(browser, tag, device, errors) {
   page.once('dialog', d => { msg = d.message(); d.accept(); });
   await page.click('#delete-btn');
   await page.waitForSelector('.detail-title:has-text("Pizza")');
-  ok(msg.includes('2 recipes link to it') && msg.includes('Those ingredients stay, as plain text'), T('delete confirmation counts linking recipes'), msg);
+  ok(msg.includes('These 2 recipes link to it:\n• Pizza\n• Zesty Dressing\n') && msg.includes('Their linked ingredients will become plain text.'),
+     T('delete confirmation lists the linking recipes, A to Z'), msg);
   ok(hashNow() === '#/recipe/rP', T('after delete you go back where you came from'), hashNow());
   const left = await page.evaluate(() => DB.getAllRecipes());
   const L = Object.fromEntries(left.map(r => [r.id, r]));
@@ -518,6 +523,11 @@ async function linkTests(browser, tag, device, errors) {
   // The refused update surfaces as an uncaught error in the cursor callback; that's expected here.
   for (let n = errors.length - 1; n >= 0; n--) if (errors[n].includes('test: update refused')) errors.splice(n, 1);
   ok(atomic.failed && atomic.x && atomic.y === 'rX', T('delete and unlink happen in one transaction (all or nothing)'), atomic);
+  // One linking recipe: singular wording, and the name is listed.
+  await openDetail('#/recipe/rX');
+  page.once('dialog', d => { msg = d.message(); d.dismiss(); });
+  await page.click('#delete-btn'); await page.waitForTimeout(200);
+  ok(msg.includes('This recipe links to it:\n• Y\n') && msg.includes('Their linked ingredient will become plain text.'), T('delete confirmation, one linking recipe'), msg);
   await page.evaluate(() => DB.deleteRecipe('rX').then(() => DB.deleteRecipe('rY')));
 
   // ---- Dark mode ----

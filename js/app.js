@@ -392,8 +392,8 @@
     // Back returns to the recipe you came from (skipping any deleted since).
     trail = trail.filter((t) => byId.has(t));
     const back = trail.length ? recipeHash(trail[0], trail.slice(1)) : '#/';
-    // Recipes with an ingredient linking here (for the delete message).
-    const linkedFrom = all.filter((x) => x.id !== r.id && x.ingredients.some((i) => i.recipeId === r.id)).length;
+    // Recipes with an ingredient linking here, A to Z (for the delete message).
+    const linkedFrom = all.filter((x) => x.id !== r.id && x.ingredients.some((i) => i.recipeId === r.id)).sort(byTitle);
 
     // Prepare the share file now: Safari only opens the share sheet if it's
     // called straight from the tap, with no waiting in between.
@@ -475,9 +475,13 @@
     });
 
     view.querySelector('#delete-btn').addEventListener('click', async () => {
-      const links = linkedFrom
-        ? `\n\n${linkedFrom} recipe${linkedFrom === 1 ? ' links' : 's link'} to it. ` +
-          `${linkedFrom === 1 ? 'That ingredient stays' : 'Those ingredients stay'}, as plain text.`
+      // List the recipes that link here (at most 10 names, so the dialog fits).
+      const n = linkedFrom.length;
+      const shown = linkedFrom.slice(0, 10).map((x) => `• ${x.title || 'Untitled'}`);
+      if (n > shown.length) shown.push(`• and ${n - shown.length} more`);
+      const links = n
+        ? `\n\n${n === 1 ? 'This recipe links' : `These ${n} recipes link`} to it:\n${shown.join('\n')}\n\n` +
+          `Their linked ${n === 1 ? 'ingredient' : 'ingredients'} will become plain text.`
         : '';
       if (!confirm(`Delete “${r.title || 'Untitled'}”? This can't be undone.${links}`)) return;
       await DB.deleteRecipe(r.id); // also unlinks ingredients that point here
@@ -610,7 +614,7 @@
         </li>`).join('');
     }
 
-    /** "🔗 Links to Pizza Dough · Remove link" under a linked row. */
+    /** "🔗 Links to Pizza Dough · Unlink" under a linked row. */
     function linkInfo(ing, i) {
       const target = recipeById.get(ing.recipeId);
       return `
@@ -621,7 +625,7 @@
                      : 'Links to a recipe that isn’t on this device'}
           </span>
           <button type="button" class="btn-link link-remove" data-action="unlink-ingredient" data-index="${i}"
-                  aria-label="Remove link from ingredient ${i + 1}">Remove link</button>
+                  aria-label="Unlink ingredient ${i + 1}">Unlink</button>
         </div>`;
     }
 

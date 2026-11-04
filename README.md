@@ -52,7 +52,7 @@ first.
   you're editing. If you have no Other recipes yet, the picker says so.
 - Pick a recipe to link it. If the ingredient's name is blank, it's filled in
   with the recipe's title. A name you already typed is never changed.
-- A linked row shows **Links to** and the recipe's name. Tap **Remove link** to make it plain
+- A linked row shows **Links to** and the recipe's name. Tap **Unlink** to make it plain
   text again (the name stays). Links move with their row and are saved with
   the recipe.
 - On the recipe page a linked ingredient is underlined with a **›**. Tap it to
@@ -63,9 +63,11 @@ How links behave:
 
 - **Rename** the linked recipe: the link still works (it uses the recipe's id).
   The ingredient keeps its own name.
-- **Delete** the linked recipe: the delete confirmation says how many recipes
-  link to it. Those ingredients become plain text, in the same step as the
-  delete.
+- **Delete** the linked recipe: the delete confirmation lists the recipes
+  that link to it. Their linked ingredients become plain text, in the same
+  step as the delete.
+- The browser's own back (or swipe back) also works, because each link is a
+  normal page change in the app's address.
 - **Change the meal type** of a linked recipe away from Other: links to it keep
   working. It just stops appearing in the picker.
 - Other recipes can link to each other, even in a loop. A recipe can't link
