@@ -15,7 +15,7 @@
  * for the version with a { type: 'get-version' } message.
  */
 
-const CACHE_VERSION = 'v9';
+const CACHE_VERSION = 'v10';
 const CACHE_NAME = `cookbook-${CACHE_VERSION}`;
 
 // Relative paths, so this works under https://<user>.github.io/<repo>/.
@@ -25,6 +25,7 @@ const APP_FILES = [
   'css/styles.css',
   'js/model.js',
   'js/match.js',
+  'js/foods.js',
   'js/tags.js',
   'js/transfer.js',
   'js/db.js',

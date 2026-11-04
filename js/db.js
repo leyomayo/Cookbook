@@ -1,9 +1,15 @@
 /*
  * db.js — on-device storage using IndexedDB.
  *
- * One database ("cookbook") with two object stores:
+ * One database ("cookbook") with three object stores:
  *   recipes  one object per recipe, keyed by recipe id
  *   tags     the tag list: { key: "comfort food", name: "Comfort food" }
+ *   grocery  the grocery list, one object per item, keyed by item id:
+ *            { id: "g_…", name: "butter", amount: "1/2 cup",
+ *              recipeId: "r_…", recipeTitle: "Garlic Butter Pasta",
+ *              ingredientId: "i_…", checked: false, addedAt: 1730000000000 }
+ *            The recipe title is copied in, so the list still reads well if
+ *            the recipe is renamed or deleted. Not part of backups or shares.
  *
  * Nothing ever leaves the device. Every function returns a Promise.
  */
@@ -11,9 +17,11 @@
 const DB = (() => {
   const DB_NAME = 'cookbook';
   // 1: recipes store. 2: tags store, and recipes converted to schema 2.
-  const DB_VERSION = 2;
+  // 3: grocery store (empty). Recipes and tags aren't touched.
+  const DB_VERSION = 3;
   const RECIPES = 'recipes';
   const TAGS = 'tags';
+  const GROCERY = 'grocery';
 
   let dbPromise = null;
 
@@ -31,6 +39,9 @@ const DB = (() => {
           db.createObjectStore(RECIPES, { keyPath: 'id' });
         }
         if (event.oldVersion < 2) upgradeToV2(db, tx);
+        if (event.oldVersion < 3 && !db.objectStoreNames.contains(GROCERY)) {
+          db.createObjectStore(GROCERY, { keyPath: 'id' });
+        }
       };
 
       req.onsuccess = () => {
@@ -194,6 +205,43 @@ const DB = (() => {
     return tags[0];
   }
 
+  /* ---------- Grocery list ---------- */
+
+  /** Every grocery item, oldest first (the order they were added). */
+  async function getGroceryItems() {
+    return (await readAll(GROCERY)).sort((a, b) => a.addedAt - b.addedAt || a.id.localeCompare(b.id));
+  }
+
+  /** Add items; each needs name, amount, recipeId, recipeTitle, ingredientId. */
+  async function addGroceryItems(items) {
+    const now = Date.now();
+    const rows = items.map((item, n) => ({
+      checked: false, ...item, id: Model.newId('g'), addedAt: now + n,
+    }));
+    await write([GROCERY], (tx) => rows.forEach((row) => tx.objectStore(GROCERY).put(row)));
+    return rows;
+  }
+
+  /** Tick or untick items by id. */
+  async function setGroceryChecked(ids, checked) {
+    await write([GROCERY], (tx) => {
+      const store = tx.objectStore(GROCERY);
+      ids.forEach((id) => {
+        store.get(id).onsuccess = (e) => {
+          if (e.target.result) store.put({ ...e.target.result, checked });
+        };
+      });
+    });
+  }
+
+  async function deleteGroceryItems(ids) {
+    await write([GROCERY], (tx) => ids.forEach((id) => tx.objectStore(GROCERY).delete(id)));
+  }
+
+  async function clearGrocery() {
+    await write([GROCERY], (tx) => tx.objectStore(GROCERY).clear());
+  }
+
   /**
    * Ask the browser not to clear our data under storage pressure.
    * Safari grants this to Home Screen apps; elsewhere it's best effort.
@@ -207,5 +255,6 @@ const DB = (() => {
   return {
     getAllRecipes, getRecipe, saveRecipe, importRecipes, deleteRecipe,
     getTagNames, addTag, requestPersistence,
+    getGroceryItems, addGroceryItems, setGroceryChecked, deleteGroceryItems, clearGrocery,
   };
 })();
