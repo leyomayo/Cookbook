@@ -17,6 +17,9 @@ IndexedDB storage. No servers, no accounts, no cloud services.
 - **Recipe detail** page. On iPad the ingredients and directions sit side by side.
   Tap a direction step to see the ingredients it uses.
 - **Tag list** that starts with 46 common tags and grows as you add your own
+- **Grocery list**: add a recipe's ingredients, see related recipes, and shop
+  by food type or by recipe. A panel at the bottom of the recipe list switches
+  between Cookbook and Grocery List.
 - **Recipe links**: an ingredient can link to a recipe in the Other category,
   so a homemade sauce or broth opens its own recipe
 - **Backup, sharing and adding from a file**
@@ -101,9 +104,9 @@ on a step selects it.
 - Tap the selected step's **text** again to clear the highlight. Checks stay.
 - Tap a checked step's **number** to uncheck it.
 
-Checks are kept while you open a linked recipe and come back (each recipe
-keeps its own). They're cleared when you go back to the recipe list, and
-they're never saved with the recipe.
+Checks and the highlighted step are kept while you open a linked recipe and
+come back (each recipe keeps its own). They're cleared when you go back to the
+recipe list, and they're never saved with the recipe.
 
 Ingredients are found by keyword, so nothing needs to be set up and existing
 recipes work as they are. A step mentions an ingredient when it contains any
@@ -114,6 +117,52 @@ Because it's word based, a step that says "pepper" finds both "black pepper"
 and "bell pepper", and a step that says "the sauce" finds nothing unless an
 ingredient is called sauce. The rules live in `js/match.js` so other features
 can reuse them.
+
+## Grocery list
+
+The panel at the bottom of the recipe list has **Cookbook** (left) and
+**Grocery List** (right). It's there on those two screens only; inside a
+recipe you see just the recipe.
+
+### Adding a recipe
+
+On a recipe, tap **Add to grocery list** (between Share and Delete). A
+confirmation lists the ingredients with their amounts. Tap ✕ next to anything
+you already have (**Undo** puts it back), then tap **Add**. A linked homemade
+ingredient, like a pesto, is added as one item; its own recipe's ingredients
+aren't added.
+
+Under **Related recipes** are recipes that share ingredients with this one,
+most shared first, with the shared ingredients named. They're good to cook in
+the same week. Salt, pepper, oil and water don't count, so they don't make
+everything look related. Tap one to open it; a note at the top takes you back,
+and the confirmation reopens as you left it. Cancel forgets it, and so does
+going back to the recipe list.
+
+### Shopping
+
+- **By food type** (the default): Produce, Meat & Seafood, Dairy & Eggs,
+  Bakery, Pantry, Spices, Frozen, Other. The same food from several recipes is
+  one line with each amount listed, for example "butter: 1/2 cup, 2 tbsp".
+  Amounts aren't added up. The recipes it's for are listed under it.
+- **By recipe**: each recipe's items on their own.
+- Tap an item to tick it off, ✕ to remove it. On a shared line, ticking or
+  removing does all of its amounts. **Clear** (top right) empties the list,
+  after asking.
+
+The list is saved on the device, so it's still there after the app is closed.
+It isn't part of backups or shared recipe files.
+
+### How food types are found
+
+`js/foods.js` has a built-in list of about 340 common foods, each with its
+food type. An ingredient's name is matched with the longest food name in it,
+so "extra virgin olive oil" is olive oil (Pantry), "red bell peppers" is bell
+pepper (Produce) and "chicken stock" is stock (Pantry). Anything with "frozen"
+in its name goes in Frozen; anything not in the list goes in Other. Some names
+are marked as the same food ("garlic cloves" and "garlic"), so they share a
+grocery line and count as shared for related recipes. To add a food, add it
+to the right type in `js/foods.js` and bump `CACHE_VERSION`.
 
 ## Backup, sharing and adding from a file
 
@@ -249,7 +298,8 @@ manifest.webmanifest   Name, icons and display mode for installing
 sw.js                  Service worker: offline caching of the app files
 css/styles.css         All styles. Mobile first, with a wider layout for iPad.
 js/model.js            Recipe data shape, defaults, schema upgrades (normalizeRecipe)
-js/match.js            Keyword matching (which ingredients a step mentions), reusable
+js/match.js            Keyword and phrase matching (step ingredients, food names), reusable
+js/foods.js            Built-in food list: food types, staples, related recipes
 js/tags.js             Starter tags, tag list helpers, the tag editor
 js/transfer.js         Export/share/import: file names and format, checks, conflict handling
 js/db.js               IndexedDB storage: recipes and the tag list
@@ -283,6 +333,12 @@ recipe read from storage or from a file.
   merges tags that differ only by case.
 
 The tag list is a separate IndexedDB store (`tags`), keyed by the lower-case name.
+
+The grocery list is a third store (`grocery`), one row per item: name,
+amount, the recipe's id and title (copied, so the list still reads well if the
+recipe changes), the ingredient id, ticked or not, and when it was added. Food
+types aren't stored; they're worked out when the list is shown. Database
+version 3 added this store; the upgrade doesn't touch recipes or tags.
 
 ### File format
 

@@ -13,7 +13,8 @@
  * "Import complete" counts, importing old .json files, offline loading with
  * the current cache, recipe links (section G) and step ingredient
  * highlighting and step checking (section H), the update notice and the
- * launch logo (section I).
+ * launch logo (section I), and the grocery list with related recipes and the
+ * remembered step (section J).
  */
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -336,11 +337,11 @@ async function suite(browser, tag, device) {
   await page.screenshot({ path: SP + `/${tag}-v3-list-2.png` });
 
 
-  // ---------- F. Offline with cache v9 ----------
+  // ---------- F. Offline with cache v10 ----------
   await page.goto(URL0); await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload(); await page.waitForSelector('.card');
   const keys = await page.evaluate(() => caches.keys());
-  ok(JSON.stringify(keys) === '["cookbook-v9"]', 'only cache cookbook-v9', keys);
+  ok(JSON.stringify(keys) === '["cookbook-v10"]', 'only cache cookbook-v10', keys);
   await ctx.setOffline(true);
   for (const h of ['#/', '#/tags', '#/backup', '#/new']) {
     await page.goto(URL0 + h); await page.reload();
@@ -359,6 +360,9 @@ async function suite(browser, tag, device) {
 
   // ---------- I. Update notice and launch ----------
   await updateTests(browser, tag, device, errors);
+
+  // ---------- J. Grocery list ----------
+  await groceryTests(browser, tag, device, errors);
 
   ok(errors.length === 0, `${tag}: no page errors`, errors);
 }
@@ -975,4 +979,239 @@ async function updateTests(browser, tag, device, errors) {
   ok(/version 100\./.test(await page.textContent('#update-notice')), T('on other screens the update applies straight away'));
   await ctx.close();
   await new Promise(r => server.close(r));
+}
+
+
+/*
+ * J. Grocery list: the bottom panel, Add to grocery list with related
+ * recipes, the Grocery List screen, storage, and the remembered step.
+ */
+async function groceryTests(browser, tag, device, errors) {
+  const T = (msg) => `grocery (${tag}): ${msg}`;
+
+  // ---- Database upgrade from version 2 keeps recipes and tags ----
+  const up = await browser.newContext({ ...devices[device] });
+  const upPage = await up.newPage();
+  upPage.on('pageerror', e => errors.push(e.message));
+  await upPage.goto(URL0 + 'README.md');
+  await upPage.evaluate(() => new Promise((res, rej) => {
+    const req = indexedDB.open('cookbook', 2);
+    req.onupgradeneeded = () => { req.result.createObjectStore('recipes', { keyPath: 'id' }); req.result.createObjectStore('tags', { keyPath: 'key' }); };
+    req.onsuccess = () => {
+      const tx = req.result.transaction(['recipes', 'tags'], 'readwrite');
+      tx.objectStore('recipes').put({ id: 'rOld', schemaVersion: 2, title: 'Old Soup', mealType: 'lunch', prepMinutes: 5, cookMinutes: 30, servings: 4, tags: ['Mine'], ingredients: [{ id: 'iO', amount: '1', name: 'onion', recipeId: null }], steps: [{ id: 'sO', text: 'Cook the onion.', ingredientIds: [] }], createdAt: 1, updatedAt: 2 });
+      tx.objectStore('tags').put({ key: 'mine', name: 'Mine' });
+      tx.oncomplete = () => { req.result.close(); res(); };
+    };
+    req.onerror = () => rej(req.error);
+  }));
+  await upPage.goto(URL0); await upPage.waitForSelector('.card');
+  const upgraded = await upPage.evaluate(async () => {
+    const r = await DB.getRecipe('rOld'), t = await DB.getTagNames(), g = await DB.getGroceryItems();
+    const raw = await new Promise(res => { const q = indexedDB.open('cookbook'); q.onsuccess = () => { const d = q.result; res({ v: d.version, stores: [...d.objectStoreNames] }); d.close(); }; });
+    return { title: r.title, updatedAt: r.updatedAt, ing: r.ingredients[0].name, tags: t.includes('Mine'), g: g.length, ...raw };
+  });
+  ok(upgraded.v === 3 && upgraded.stores.join() === 'grocery,recipes,tags' && upgraded.g === 0, T('database upgrades to version 3 with an empty grocery store'), upgraded);
+  ok(upgraded.title === 'Old Soup' && upgraded.updatedAt === 2 && upgraded.ing === 'onion' && upgraded.tags, T('upgrade leaves existing recipes and tags untouched'), upgraded);
+  await up.close();
+
+  const ctx = await browser.newContext({ ...devices[device] });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(e.message));
+  let lastDialog = null;
+  page.on('dialog', d => { lastDialog = d.message(); d[page.__confirm ? 'accept' : 'dismiss'](); });
+  await page.goto(URL0); await page.waitForSelector('#recipe-grid');
+
+  // Five real recipes. Pasta links to the Pesto recipe.
+  await page.evaluate(async () => {
+    const ing = (id, amount, name, recipeId = null) => ({ id, amount, name, recipeId });
+    const step = (id, text) => ({ id, text, ingredientIds: [] });
+    const base = { ...Model.newRecipe(), mealType: 'dinner' };
+    await DB.saveRecipe({ ...base, id: 'rPesto', title: 'Basil Pesto', mealType: 'other', ingredients: [
+      ing('p1', '2 cups', 'fresh basil'), ing('p2', '1/3 cup', 'pine nuts'), ing('p3', '1', 'garlic clove'),
+      ing('p4', '1/2 cup', 'olive oil'), ing('p5', '1/2 cup', 'parmesan cheese')], steps: [step('ps1', 'Blend everything.')] });
+    await DB.saveRecipe({ ...base, id: 'rPasta', title: 'Garlic Butter Pasta', ingredients: [
+      ing('a1', '8 oz', 'spaghetti'), ing('a2', '1/2 cup', 'butter'), ing('a3', '4 cloves', 'garlic, minced'),
+      ing('a4', '1 tsp', 'salt'), ing('a5', '1/4 cup', 'fresh parsley'), ing('a6', '1/2 cup', 'grated parmesan cheese'),
+      ing('a7', '3 tbsp', '', 'rPesto')], steps: [
+      step('s1', 'Boil the spaghetti.'), step('s2', 'Melt the butter with the salt.'), step('s3', 'Add the garlic.'),
+      step('s4', 'Toss with the pesto, parsley and cheese.')] });
+    await DB.saveRecipe({ ...base, id: 'rBread', title: 'Garlic Bread', mealType: 'snack', ingredients: [
+      ing('b1', '1', 'baguette'), ing('b2', '3 tbsp', 'butter'), ing('b3', '2', 'garlic cloves'), ing('b4', '1 tbsp', 'parsley'),
+      ing('b5', 'pinch', 'salt')], steps: [step('bs1', 'Spread and bake.')] });
+    await DB.saveRecipe({ ...base, id: 'rCookies', title: 'Butter Cookies', mealType: 'snack', ingredients: [
+      ing('c1', '2 tbsp', 'unsalted butter'), ing('c2', '2 cups', 'flour'), ing('c3', '1 cup', 'sugar'), ing('c4', '2', 'eggs'),
+      ing('c5', '1/4 tsp', 'salt')], steps: [step('cs1', 'Mix and bake.')] });
+    await DB.saveRecipe({ ...base, id: 'rSoup', title: 'Tomato Soup', mealType: 'lunch', ingredients: [
+      ing('t1', '2 lb', 'tomatoes'), ing('t2', '1', 'onion'), ing('t3', '1 tbsp', 'olive oil'), ing('t4', '', 'salt and pepper'),
+      ing('t5', '2 cups', 'water')], steps: [step('ts1', 'Simmer.')] });
+  });
+  const recipesBefore = JSON.stringify(await page.evaluate(() => DB.getAllRecipes()));
+  const open = async (hash) => { await page.goto(URL0 + hash); await page.reload(); await page.waitForSelector('#view > *'); await page.waitForSelector('#splash', { state: 'detached' }); };
+  const panel = () => page.evaluate(() => {
+    const t = document.getElementById('tabbar'), r = t.getBoundingClientRect();
+    return { shown: !t.hidden && getComputedStyle(t).display !== 'none', current: t.querySelector('[aria-current=page]')?.dataset.tab || null,
+      atBottom: Math.round(r.bottom) === innerHeight, labels: [...t.querySelectorAll('.tab')].map(a => a.textContent.trim()) };
+  });
+  const groceryRows = () => page.evaluate(() => DB.getGroceryItems());
+
+  // ---- Bottom panel ----
+  await open('#/');
+  let pn = await panel();
+  ok(pn.shown && pn.current === 'list' && pn.atBottom && pn.labels.join('|') === '📖Cookbook|🛒Grocery List', T('panel on the recipe list: Cookbook left, Grocery List right'), pn);
+  await page.click('#tabbar [data-tab=grocery]'); await page.waitForSelector('#grocery-screen');
+  pn = await panel();
+  ok(pn.shown && pn.current === 'grocery', T('panel on the Grocery List screen'), pn);
+  ok(/Your grocery list is empty\./.test(await page.textContent('#grocery-screen')), T('empty list shows a simple message'));
+  await page.screenshot({ path: SP + `/${tag}-grocery-empty.png` });
+  for (const h of ['#/recipe/rPasta', '#/tags', '#/backup', '#/new']) {
+    await open(h); await page.waitForTimeout(100);
+    pn = await panel();
+    ok(!pn.shown, T(`panel hidden on ${h}`), pn);
+  }
+  await open('#/');
+  const lastCardCovered = await page.evaluate(() => { scrollTo(0, document.body.scrollHeight); const c = [...document.querySelectorAll('.card')].pop().getBoundingClientRect(); return c.bottom > document.getElementById('tabbar').getBoundingClientRect().top; });
+  ok(!lastCardCovered, T('panel doesn\'t cover the last recipe card'));
+
+  // ---- Add to grocery list: button and confirmation ----
+  await open('#/recipe/rPasta');
+  const order = await page.$$eval('.detail-actions .btn', l => l.map(b => b.textContent.trim()));
+  ok(order.join('|') === 'Share recipe|Add to grocery list|Delete recipe', T('Add to grocery list sits between Share and Delete'), order);
+  await page.click('#grocery-btn'); await page.waitForSelector('#grocery-add[open]');
+  const listed = await texts(page, '#grocery-add .add-list li .amount, #grocery-add .add-list li .add-name');
+  const pairs = []; for (let n = 0; n < listed.length; n += 2) pairs.push(`${listed[n]} ${listed[n + 1]}`.trim());
+  ok(pairs.join('|') === '8 oz spaghetti|1/2 cup butter|4 cloves garlic, minced|1 tsp salt|1/4 cup fresh parsley|1/2 cup grated parmesan cheese|3 tbsp Basil Pesto', T('confirmation lists every ingredient with its amount; the linked pesto is one item'), pairs);
+  const rel = await page.$$eval('#grocery-add .related-btn', l => l.map(b => b.textContent.replace(/\s+/g, ' ').trim()));
+  ok(rel.length === 3 && rel[0] === 'Garlic Bread 3 shared: butter, garlic, parsley' && rel[1] === 'Basil Pesto 2 shared: garlic, parmesan' && rel[2] === 'Butter Cookies 1 shared: butter',
+     T('related recipes: most shared first, shared ingredients named, staples (salt, oil, water, pepper) ignored'), rel);
+  ok(!rel.some(r => r.includes('Tomato Soup')), T('a recipe sharing only staples isn\'t related'));
+  const addLabel = () => page.textContent('#grocery-add-btn');
+  await page.click('#grocery-add [data-toggle=a4]'); await page.click('#grocery-add [data-toggle=a5]');
+  ok(await addLabel() === 'Add 5 items' && await page.$eval('#grocery-add li[data-ing=a4]', li => li.classList.contains('is-removed')), T('removing items updates the count'), await addLabel());
+  await page.click('#grocery-add [data-toggle=a5]');
+  ok(await addLabel() === 'Add 6 items', T('Undo puts an item back'));
+  await page.screenshot({ path: SP + `/${tag}-grocery-confirm.png` });
+
+  // Open a related recipe: the pending add survives the trip.
+  await page.click('#grocery-add [data-related=rBread]');
+  await page.waitForSelector('.detail-title:has-text("Garlic Bread")');
+  ok(/#\/recipe\/rBread\?from=rPasta/.test(page.url()) && (await page.$$('#grocery-add')).length === 0, T('tapping a related recipe opens it'), page.url());
+  ok(/You're adding “Garlic Butter Pasta” to your grocery list/.test(await page.textContent('#pending-add')), T('related recipe shows the add is still waiting'));
+  await page.screenshot({ path: SP + `/${tag}-grocery-related.png` });
+  await page.click('#pending-add a'); await page.waitForSelector('#grocery-add[open]');
+  ok(await addLabel() === 'Add 6 items' && await page.$eval('#grocery-add li[data-ing=a4]', li => li.classList.contains('is-removed')), T('coming back reopens the confirmation as it was left'));
+  await page.click('#grocery-add-btn'); await page.waitForSelector('#grocery-add', { state: 'detached' });
+  await page.waitForSelector('.toast');
+  ok(await page.textContent('.toast') === 'Added 6 items to your grocery list.', T('confirming adds the items'));
+  let rows = await groceryRows();
+  ok(rows.length === 6 && !rows.some(r => r.name === 'salt') && rows.every(r => r.recipeId === 'rPasta' && r.recipeTitle === 'Garlic Butter Pasta' && r.checked === false),
+     T('removed item isn\'t added; items remember their recipe'), rows.map(r => r.name));
+  ok(rows.some(r => r.name === 'Basil Pesto' && r.amount === '3 tbsp') && !rows.some(r => /basil$|pine/.test(r.name)), T('linked pesto is one item; its recipe\'s ingredients aren\'t pulled in'), rows.map(r => r.name));
+  // Cancel doesn't add anything and forgets the pending add.
+  await page.click('#grocery-btn'); await page.waitForSelector('#grocery-add[open]');
+  ok(/already on your grocery list/.test(await page.textContent('#grocery-add')), T('adding a recipe again says it\'s already on the list'));
+  await page.click('#grocery-add button[value=cancel]'); await page.waitForSelector('#grocery-add', { state: 'detached' });
+  ok((await groceryRows()).length === 6, T('Cancel adds nothing'));
+  await open('#/recipe/rPasta'); await page.waitForTimeout(200);
+  ok((await page.$$('#grocery-add')).length === 0, T('after Cancel the confirmation doesn\'t reopen'));
+
+  // Add two more recipes in full.
+  for (const id of ['rBread', 'rCookies']) {
+    await open('#/recipe/' + id);
+    await page.click('#grocery-btn'); await page.waitForSelector('#grocery-add[open]');
+    await page.click('#grocery-add-btn'); await page.waitForSelector('#grocery-add', { state: 'detached' });
+  }
+  ok((await groceryRows()).length === 16, T('16 items after adding three recipes'));
+
+  // ---- Grocery List: by food type ----
+  await open('#/grocery');
+  const view = () => page.$$eval('.grocery-group', l => l.map(g => ({
+    title: g.querySelector('h3').textContent,
+    lines: [...g.querySelectorAll('.grocery-label')].map(x => x.textContent.replace(/\s+/g, ' ').trim()),
+  })));
+  let v = await view();
+  ok(v.map(g => g.title).join('|') === 'Produce|Dairy & Eggs|Bakery|Pantry|Spices', T('food type view: groups in aisle order, empty ones left out'), v.map(g => g.title));
+  const lineOf = (title) => v.find(g => g.title === title)?.lines || [];
+  ok(lineOf('Dairy & Eggs').includes('butter: 1/2 cup, 3 tbsp, 2 tbsp'), T('shared ingredient is one line with each amount listed (not added up)'), lineOf('Dairy & Eggs'));
+  ok(lineOf('Produce').join('|') === 'garlic: 4 cloves, 2|parsley: 1/4 cup, 1 tbsp', T('"garlic, minced" and "garlic cloves" share a line'), lineOf('Produce'));
+  ok(lineOf('Pantry').join('|') === 'spaghetti: 8 oz|Basil Pesto: 3 tbsp|flour: 2 cups|sugar: 1 cup' && lineOf('Bakery').join() === 'baguette: 1' && lineOf('Spices').join() === 'salt: pinch, 1/4 tsp',
+     T('other food types sorted right'), v);
+  ok(lineOf('Dairy & Eggs').includes('grated parmesan cheese: 1/2 cup') && lineOf('Dairy & Eggs').includes('eggs: 2'), T('dairy and eggs'), lineOf('Dairy & Eggs'));
+  const from = await page.$eval('.grocery-line:has-text("butter:") .grocery-from', el => el.textContent);
+  ok(from === 'Garlic Butter Pasta, Garlic Bread, Butter Cookies', T('a shared line names its recipes'), from);
+  await page.screenshot({ path: SP + `/${tag}-grocery-type.png`, fullPage: true });
+
+  // Tick and untick a shared line: all its items.
+  await page.click('.grocery-line:has-text("butter:") [data-tick]');
+  rows = await groceryRows();
+  ok(rows.filter(r => /butter$/.test(r.name)).every(r => r.checked) && rows.filter(r => r.checked).length === 3, T('ticking a shared line ticks each of its items'));
+  ok(await page.$eval('.grocery-line:has-text("butter:")', li => li.classList.contains('is-checked')) && await page.textContent('.grocery-count') === '3 of 16 ticked', T('ticked line is shown as done, with a count'));
+  await page.click('.grocery-line:has-text("butter:") [data-tick]');
+  ok((await groceryRows()).every(r => !r.checked), T('tapping again unticks'));
+  await page.click('.grocery-line:has-text("sugar") [data-tick]');
+  // Remove a single item, and a shared line.
+  await page.click('.grocery-line:has-text("flour") [data-remove]');
+  await page.click('.grocery-line:has-text("parsley") [data-remove]');
+  rows = await groceryRows();
+  ok(rows.length === 13 && !rows.some(r => /flour|parsley/.test(r.name)), T('removing a line removes its items'), rows.length);
+
+  // ---- By recipe ----
+  await page.click('[data-group=recipe]');
+  v = await view();
+  ok(v.map(g => g.title).join('|') === 'Garlic Butter Pasta|Garlic Bread|Butter Cookies', T('by recipe: one group per recipe, in the order added'), v.map(g => g.title));
+  ok(v[0].lines.join('|') === 'spaghetti: 8 oz|butter: 1/2 cup|garlic, minced: 4 cloves|grated parmesan cheese: 1/2 cup|Basil Pesto: 3 tbsp', T('by recipe: each item on its own line with its amount'), v[0].lines);
+  ok(await page.$eval('[data-group-title="Butter Cookies"] .grocery-line:has-text("sugar")', li => li.classList.contains('is-checked')), T('ticks show in both views'));
+  await page.screenshot({ path: SP + `/${tag}-grocery-recipe.png`, fullPage: true });
+
+  // ---- Survives a reload (closing the app) ----
+  await page.reload(); await page.waitForSelector('#grocery');
+  v = await view();
+  ok(v.map(g => g.title).join('|') === 'Garlic Butter Pasta|Garlic Bread|Butter Cookies' && (await groceryRows()).length === 13, T('list and the chosen grouping survive a reload'));
+  ok(await page.textContent('.grocery-count') === '1 of 13 ticked', T('ticks survive a reload'));
+  await page.click('[data-group=type]');
+
+  // ---- Not in backups or shares; recipes untouched ----
+  const files = await page.evaluate(async () => JSON.stringify([Transfer.backup(await DB.getAllRecipes(), await DB.getTagNames()), Transfer.share('rPasta', await DB.getAllRecipes())]));
+  ok(!/grocery|"g_/.test(files), T('grocery list is left out of backups and shares'));
+  ok(JSON.stringify(await page.evaluate(() => DB.getAllRecipes())) === recipesBefore, T('adding to the list doesn\'t change recipes'));
+
+  // ---- Clear with confirmation ----
+  page.__confirm = false;
+  await page.click('#header-right button');
+  await page.waitForTimeout(200);
+  ok(/Clear the whole grocery list\?/.test(lastDialog) && (await groceryRows()).length === 13, T('Clear asks first; saying no keeps the list'), lastDialog);
+  page.__confirm = true;
+  await page.click('#header-right button'); await page.waitForSelector('.grocery-empty');
+  ok((await groceryRows()).length === 0 && /Your grocery list is empty/.test(await page.textContent('#grocery-screen')), T('Clear empties the list'));
+  ok(!(await page.$('#header-right button')), T('no Clear button on an empty list'));
+  page.__confirm = false;
+
+  // ---- Remembered step ----
+  await open('#/recipe/rPasta');
+  await page.click('.step-list li:nth-child(4) .step-btn');
+  await page.click('.step-list li:nth-child(1) .step-num-btn'); await page.click('.step-list li:nth-child(1) .step-num-btn'); // check step 1, step 2 selected
+  await page.click('.step-list li:nth-child(4) .step-btn');
+  const sel = () => page.$$eval('.step-list li', l => l.map((li, n) => li.classList.contains('is-selected') ? n + 1 : 0).filter(Boolean).join());
+  ok(await sel() === '4', T('step 4 highlighted'));
+  await page.click('.ingredient-list .ing-link'); await page.waitForSelector('.detail-title:has-text("Basil Pesto")');
+  await page.click('.step-list li:nth-child(1) .step-btn');
+  await page.click('#header-left a'); await page.waitForSelector('.detail-title:has-text("Garlic Butter Pasta")');
+  const back = { sel: await sel(), matches: await page.$$eval('.ingredient-list li.is-match', l => l.map(li => li.dataset.ingredientId).join()), bar: await page.$eval('#step-bar', b => !b.hidden) };
+  ok(back.sel === '4' && back.matches === 'a5,a6,a7' && back.bar, T('the highlighted step is still highlighted after a linked recipe'), back);
+  await page.click('.ingredient-list .ing-link'); await page.waitForSelector('.detail-title:has-text("Basil Pesto")');
+  ok(await sel() === '1', T('the linked recipe remembers its own highlighted step'));
+  await page.click('#header-left a'); await page.waitForSelector('.detail-title:has-text("Garlic Butter Pasta")');
+  await page.click('#header-left a'); await page.waitForSelector('#recipe-grid');
+  await page.click('.card:has-text("Garlic Butter Pasta")'); await page.waitForSelector('.step-btn');
+  ok(await sel() === '' && await page.$$eval('.step-list li.is-checked', l => l.length) === 0, T('going back to the recipe list clears the highlight (and checks)'));
+
+  // Dark mode screenshots for a look.
+  await page.evaluate(async () => {
+    const all = await DB.getAllRecipes(), p = all.find(r => r.id === 'rPasta');
+    await DB.addGroceryItems(p.ingredients.map(i => ({ name: i.name || 'Basil Pesto', amount: i.amount, recipeId: p.id, recipeTitle: p.title, ingredientId: i.id })));
+  });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await open('#/grocery');
+  await page.screenshot({ path: SP + `/${tag}-grocery-dark.png`, fullPage: true });
+  await ctx.close();
 }

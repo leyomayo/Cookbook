@@ -43,10 +43,18 @@
   <!-- Each screen renders into this element. See js/app.js. -->
   <main id="view" class="view" tabindex="-1"></main>
 
+  <!-- Bottom panel: shown on the recipe list and the grocery list only
+       (js/app.js route() shows and hides it). -->
+  <nav class="tabbar" id="tabbar" aria-label="Main" hidden>
+    <a class="tab" href="#/" data-tab="list"><span class="tab-icon" aria-hidden="true">📖</span><span>Cookbook</span></a>
+    <a class="tab" href="#/grocery" data-tab="grocery"><span class="tab-icon" aria-hidden="true">🛒</span><span>Grocery List</span></a>
+  </nav>
+
   <!-- Classic scripts (not modules) in dependency order, so the app also
        works when opened straight from the file system during development. -->
   <script src="js/model.js"></script>
   <script src="js/match.js"></script>
+  <script src="js/foods.js"></script>
   <script src="js/tags.js"></script>
   <script src="js/transfer.js"></script>
   <script src="js/db.js"></script>

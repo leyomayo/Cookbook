@@ -16,6 +16,10 @@
  *     step that says "basil" but not one that only says "fresh".
  *     If a name is made only of such words ("cloves"), they all count.
  *   - A name matches when any of its remaining words appears in the text.
+ *
+ * bestPhrase() is stricter: it finds which of a list of phrases (like food
+ * names) appears in a text as whole words in order, preferring the longest.
+ * js/foods.js uses it for the grocery list's food types.
  */
 
 const Match = (() => {
@@ -86,5 +90,42 @@ const Match = (() => {
     return items.filter((item) => nameInWords(nameOf(item), textWords));
   }
 
-  return { stem, words, keywords, nameInWords, byKeyword };
+  /** Every word in `text`, stemmed, in order (repeats kept). */
+  function stems(text) {
+    return splitWords(text).map(stem);
+  }
+
+  // Stemmed words of each phrase, worked out once.
+  const phraseCache = new Map();
+  function phraseStems(phrase) {
+    if (!phraseCache.has(phrase)) phraseCache.set(phrase, stems(phrase));
+    return phraseCache.get(phrase);
+  }
+
+  /**
+   * The entry whose phrase best matches `text`: its words must appear in
+   * `text` side by side, in order (plurals and case ignored). The longest
+   * phrase wins ("olive oil" over "oil"); between equal lengths, the one
+   * that appears last wins, because the main word of a food name usually
+   * comes last ("chicken stock" is stock, "butter lettuce" is lettuce).
+   * Returns null when nothing matches.
+   *   bestPhrase('2 tbsp extra virgin olive oil', foods, (f) => f.name)
+   */
+  function bestPhrase(text, entries, phraseOf = (e) => e) {
+    const words = stems(text);
+    let best = null; let bestLen = 0; let bestAt = -1;
+    for (const entry of entries) {
+      const p = phraseStems(phraseOf(entry));
+      if (!p.length || p.length < bestLen) continue;
+      for (let at = words.length - p.length; at >= 0; at -= 1) {
+        if (p.every((w, k) => words[at + k] === w)) {
+          if (p.length > bestLen || at > bestAt) { best = entry; bestLen = p.length; bestAt = at; }
+          break; // the last place it appears is the one that counts
+        }
+      }
+    }
+    return best;
+  }
+
+  return { stem, words, stems, keywords, nameInWords, byKeyword, bestPhrase };
 })();
