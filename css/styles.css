@@ -393,10 +393,72 @@ input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 
   .form-actions .btn { flex: none; min-width: 140px; }
 }
 
-/* ---------- Tag filter (list screen) ---------- */
+/* ---------- Tag filter: bar on the list, and the Tags screen ---------- */
 
-.chips-tags { margin-top: calc(-1 * var(--gutter) + 8px); }
-.chip-tag { min-height: 34px; font-size: 15px; background: var(--surface-2); }
+/* Row under the meal types: Tags button, plus active tags when filtering. */
+.tag-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: calc(-1 * var(--gutter) + 8px) 0 var(--gutter);
+}
+.tag-bar-active {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.tag-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+}
+.tag-bar-count {
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 13px;
+  text-align: center;
+}
+.tag-bar-label { color: var(--muted); font-size: 15px; }
+.tag-bar .tag-bar-clear { color: var(--accent); font-weight: 600; }
+
+.tag-screen { display: grid; gap: 14px; max-width: 820px; margin: 0 auto; }
+input[type="search"].tag-search {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 17px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.tag-search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.tag-status p { margin: 0 0 4px; }
+.tag-status .btn-link { min-height: 0; padding: 0 0 0 6px; color: var(--accent); font-weight: 600; }
+.tag-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip-tag { min-height: 40px; font-size: 16px; }
+/* Stays visible above the home indicator while you scroll a long tag list. */
+.tag-screen-actions {
+  position: sticky;
+  bottom: 0;
+  padding: 12px 0 calc(12px + env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, transparent, var(--bg) 30%);
+}
+.tag-screen-actions .btn { width: 100%; }
 
 /* ---------- Tag editor (form) ---------- */
 
@@ -506,10 +568,26 @@ input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 
   left: 50%;
   bottom: calc(24px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 32px);
   padding: 10px 16px;
-  border-radius: 999px;
+  border-radius: 14px;
+  text-align: center;
   background: var(--text);
   color: var(--bg);
   font-size: 15px;
   z-index: 20;
 }
+
+/* ---------- Import complete dialog ---------- */
+
+.import-counts { margin: 0; display: grid; gap: 0; }
+.import-counts div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.import-counts dt { font-weight: 500; }
+.import-counts dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; }

@@ -1,6 +1,11 @@
 /*
  * transfer.js — export, share and import recipe files.
  *
+ * File names: a shared recipe is "<name>.recipe" and a backup is
+ * "cookbook-backup-<date>.cookbook". Inside, both are plain JSON. Older
+ * exports ended in ".json"; those still import. Import decides whether a
+ * file is valid from its contents only, never from its name.
+ *
  * File format (JSON):
  *
  *   {
@@ -76,14 +81,15 @@ const Transfer = (() => {
     return makeFile('share', withLinked(rootId, recipes));
   }
 
-  /** "Buttermilk Pancakes" → "buttermilk-pancakes.json" */
+  /** "Buttermilk Pancakes" → "buttermilk-pancakes.recipe" */
   function shareFileName(recipe) {
     const slug = recipe.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    return `${slug || 'recipe'}.json`;
+    return `${slug || 'recipe'}.recipe`;
   }
 
+  /** "cookbook-backup-2026-11-04.cookbook" */
   function backupFileName() {
-    return `cookbook-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    return `cookbook-backup-${new Date().toISOString().slice(0, 10)}.cookbook`;
   }
 
   /* ------------------------------------------------------------------ */
@@ -97,12 +103,20 @@ const Transfer = (() => {
    *
    * Call this directly from a tap handler, with the data already prepared:
    * Safari only opens the share sheet in direct response to a tap.
-   * Resolves to "shared", "downloaded" or "cancelled".
+   *
+   * Resolves to:
+   *   "shared"      the share sheet took the file
+   *   "cancelled"   the share sheet was closed without choosing anything
+   *   "refused"     the share sheet exists but wouldn't take the file, so
+   *                 it was downloaded instead (the caller tells the user)
+   *   "downloaded"  no share sheet here (e.g. a desktop browser), so it was
+   *                 downloaded
    */
   function deliver(filename, data, title) {
     const text = JSON.stringify(data, null, 2);
     if (navigator.share && navigator.canShare) {
-      // Some browsers won't share .json as application/json but will as plain text.
+      // The name keeps its .recipe / .cookbook ending whatever the type.
+      // Some browsers only share certain types, so try JSON, then plain text.
       for (const type of ['application/json', 'text/plain']) {
         const file = new File([text], filename, { type });
         if (navigator.canShare({ files: [file] })) {
@@ -110,12 +124,16 @@ const Transfer = (() => {
             () => 'shared',
             (err) => {
               if (err.name === 'AbortError') return 'cancelled'; // closed the share sheet
+              console.warn('Share sheet failed, downloading instead:', err);
               download(filename, text);
-              return 'downloaded';
+              return 'refused';
             },
           );
         }
       }
+      // A share sheet exists but won't accept this file.
+      download(filename, text);
+      return Promise.resolve('refused');
     }
     download(filename, text);
     return Promise.resolve('downloaded');
