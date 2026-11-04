@@ -7,8 +7,11 @@
  *   #/               recipe list (with meal type filter)
  *   #/tags           pick tags to filter the recipe list
  *   #/recipe/<id>    recipe detail
+ *                    (?from=<id>&from=<id>… is the trail of recipes you came
+ *                    through by tapping linked ingredients, nearest first;
+ *                    Back walks it, so it survives reloads and edits)
  *   #/new            add recipe form
- *   #/edit/<id>      edit recipe form
+ *   #/edit/<id>      edit recipe form (keeps the detail screen's ?from= trail)
  *   #/backup         export and import files
  *
  * Each screen is a function that fills <main id="view"> and sets the header.
@@ -36,6 +39,25 @@
     location.hash = hash;
   }
 
+  // Following links that loop (A → B → A …) could grow the trail forever.
+  const MAX_TRAIL = 20;
+
+  /** "?from=b&from=a" for a trail of recipe ids, nearest first ("" if empty). */
+  function trailQuery(trail) {
+    const params = new URLSearchParams(trail.slice(0, MAX_TRAIL).map((id) => ['from', id]));
+    return trail.length ? `?${params}` : '';
+  }
+
+  /** Hash for a recipe's detail screen, remembering how you got there. */
+  function recipeHash(id, trail = []) {
+    return `#/recipe/${encodeURIComponent(id)}${trailQuery(trail)}`;
+  }
+
+  /** A to Z by title, ignoring case and accents. */
+  function byTitle(a, b) {
+    return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+  }
+
   /** Remember small UI preferences (like the filter). Never required to work. */
   const prefs = {
     get(key, fallback) {
@@ -47,16 +69,17 @@
   };
 
   /**
-   * Fill the header. `back` is a hash to return to (shows a back button);
+   * Fill the header. `back` is a hash to return to (shows a back button,
+   * with `backLabel` as its spoken name if given);
    * `left` is { label, href } for a plain link on the left instead;
    * `action` is { label, onClick } for the button on the right.
    */
-  function setHeader({ title, back, left, action }) {
+  function setHeader({ title, back, backLabel, left, action }) {
     headerTitle.textContent = title;
     document.title = title === 'Cookbook' ? 'Cookbook' : `${title} · Cookbook`;
 
     if (back) {
-      headerLeft.innerHTML = `<a class="header-btn" href="${esc(back)}" aria-label="Back"><span aria-hidden="true">‹</span> Back</a>`;
+      headerLeft.innerHTML = `<a class="header-btn" href="${esc(back)}" aria-label="${esc(backLabel || 'Back')}"><span aria-hidden="true">‹</span> Back</a>`;
     } else if (left) {
       headerLeft.innerHTML = `<a class="header-btn" href="${esc(left.href)}">${esc(left.label)}</a>`;
     } else {
@@ -155,7 +178,7 @@
     });
 
     const recipes = await DB.getAllRecipes();
-    recipes.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+    recipes.sort(byTitle);
 
     let filter = getMealFilter();
 
@@ -360,10 +383,17 @@
   /* Screen: recipe detail                                               */
   /* ------------------------------------------------------------------ */
 
-  async function showDetail(id) {
+  async function showDetail(id, trail = []) {
     const all = await DB.getAllRecipes();
-    const r = all.find((x) => x.id === id);
+    const byId = new Map(all.map((x) => [x.id, x]));
+    const r = byId.get(id);
     if (!r) return showNotFound();
+
+    // Back returns to the recipe you came from (skipping any deleted since).
+    trail = trail.filter((t) => byId.has(t));
+    const back = trail.length ? recipeHash(trail[0], trail.slice(1)) : '#/';
+    // Recipes with an ingredient linking here, A to Z (for the delete message).
+    const linkedFrom = all.filter((x) => x.id !== r.id && x.ingredients.some((i) => i.recipeId === r.id)).sort(byTitle);
 
     // Prepare the share file now: Safari only opens the share sheet if it's
     // called straight from the tap, with no waiting in between.
@@ -372,8 +402,9 @@
 
     setHeader({
       title: r.title || 'Recipe',
-      back: '#/',
-      action: { label: 'Edit', onClick: () => go(`#/edit/${encodeURIComponent(r.id)}`) },
+      back,
+      backLabel: trail.length ? `Back to ${byId.get(trail[0]).title || 'Untitled'}` : undefined,
+      action: { label: 'Edit', onClick: () => go(`#/edit/${encodeURIComponent(r.id)}${trailQuery(trail)}`) },
     });
 
     // Only show the facts that were filled in.
@@ -402,11 +433,22 @@
             <h3>Ingredients</h3>
             ${r.ingredients.length ? `
               <ul class="ingredient-list">
-                ${r.ingredients.map((i) => `
-                  <li data-ingredient-id="${esc(i.id)}">
+                ${r.ingredients.map((i) => {
+                  // A link to a recipe that isn't on this device shows as plain
+                  // text; the link is kept in case that recipe is imported later.
+                  const target = i.recipeId && byId.get(i.recipeId);
+                  const name = target
+                    ? `<a class="ing-link" href="${esc(recipeHash(target.id, [r.id, ...trail]))}"
+                          aria-label="${esc(i.name || target.title)}, open recipe ${esc(target.title)}">
+                         <span>${esc(i.name || target.title)}</span><span class="ing-link-icon" aria-hidden="true">›</span>
+                       </a>`
+                    : `<span>${esc(i.name)}</span>`;
+                  return `
+                  <li data-ingredient-id="${esc(i.id)}"${target ? ' class="is-linked"' : ''}>
                     ${i.amount ? `<span class="amount">${esc(i.amount)}</span>` : ''}
-                    <span>${esc(i.name)}</span>
-                  </li>`).join('')}
+                    ${name}
+                  </li>`;
+                }).join('')}
               </ul>` : '<p class="muted">No ingredients listed.</p>'}
           </section>
 
@@ -433,9 +475,17 @@
     });
 
     view.querySelector('#delete-btn').addEventListener('click', async () => {
-      if (!confirm(`Delete “${r.title || 'Untitled'}”? This can't be undone.`)) return;
-      await DB.deleteRecipe(r.id);
-      go('#/');
+      // List the recipes that link here (at most 10 names, so the dialog fits).
+      const n = linkedFrom.length;
+      const shown = linkedFrom.slice(0, 10).map((x) => `• ${x.title || 'Untitled'}`);
+      if (n > shown.length) shown.push(`• and ${n - shown.length} more`);
+      const links = n
+        ? `\n\n${n === 1 ? 'This recipe links' : `These ${n} recipes link`} to it:\n${shown.join('\n')}\n\n` +
+          `Their linked ${n === 1 ? 'ingredient' : 'ingredients'} will become plain text.`
+        : '';
+      if (!confirm(`Delete “${r.title || 'Untitled'}”? This can't be undone.${links}`)) return;
+      await DB.deleteRecipe(r.id); // also unlinks ingredients that point here
+      go(back);
     });
   }
 
@@ -447,10 +497,10 @@
    * The form edits a working copy ("draft") of the recipe. Before any
    * add/remove/move we copy what's typed into the draft (syncFromForm),
    * change the draft, then redraw that list. Ingredient and step objects
-   * keep their ids and any extra fields (recipeId, ingredientIds), so the
-   * future linking features survive edits made in this version.
+   * keep their ids and any extra fields (recipeId, ingredientIds), so links
+   * survive moving rows, and the future step links survive edits.
    */
-  async function showForm(id) {
+  async function showForm(id, trail = []) {
     const [existing, allRecipes, tagNames] = await Promise.all([
       id ? DB.getRecipe(id) : null, DB.getAllRecipes(), DB.getTagNames(),
     ]);
@@ -461,7 +511,8 @@
     if (!draft.ingredients.length) draft.ingredients.push(Model.newIngredient());
     if (!draft.steps.length) draft.steps.push(Model.newStep());
 
-    const backTo = existing ? `#/recipe/${encodeURIComponent(existing.id)}` : '#/';
+    const backTo = existing ? recipeHash(existing.id, trail) : '#/';
+    const recipeById = new Map(allRecipes.map((x) => [x.id, x]));
     setHeader({ title: existing ? 'Edit Recipe' : 'New Recipe', back: backTo, action: { label: 'Save', onClick: save } });
 
     const mealOptions = Model.MEAL_TYPES.map((m) => `
@@ -552,11 +603,30 @@
           <input class="ing-name" type="text" autocomplete="off" placeholder="Ingredient" enterkeyhint="next"
                  aria-label="Ingredient ${i + 1}" value="${esc(ing.name)}">
           <div class="row-tools">
+            <button type="button" class="icon-btn link-btn" data-action="link-ingredient" data-index="${i}"
+                    aria-label="${ing.recipeId ? 'Change linked recipe' : 'Link to a recipe'} for ingredient ${i + 1}"
+                    ${ing.recipeId ? 'data-linked' : ''}>🔗</button>
             ${moveButtons('ingredient', i, draft.ingredients.length)}
             <button type="button" class="icon-btn" data-action="remove-ingredient" data-index="${i}"
                     aria-label="Remove ingredient ${i + 1}">✕</button>
           </div>
+          ${ing.recipeId ? linkInfo(ing, i) : ''}
         </li>`).join('');
+    }
+
+    /** "🔗 Links to Pizza Dough · Unlink" under a linked row. */
+    function linkInfo(ing, i) {
+      const target = recipeById.get(ing.recipeId);
+      return `
+        <div class="link-info">
+          <span class="link-info-text">
+            <span aria-hidden="true">🔗</span>
+            ${target ? `Links to <strong>${esc(target.title || 'Untitled')}</strong>`
+                     : 'Links to a recipe that isn’t on this device'}
+          </span>
+          <button type="button" class="btn-link link-remove" data-action="unlink-ingredient" data-index="${i}"
+                  aria-label="Unlink ingredient ${i + 1}">Unlink</button>
+        </div>`;
     }
 
     function renderSteps() {
@@ -637,6 +707,22 @@
           move(draft.ingredients, i, dir);
           renderIngredients();
           break;
+        case 'link-ingredient': {
+          const ing = draft.ingredients[i];
+          pickRecipe(allRecipes, { excludeId: draft.id, currentId: ing.recipeId }).then((picked) => {
+            if (!picked) return;
+            ing.recipeId = picked.id;
+            if (!ing.name) ing.name = picked.title; // never overwrite a typed name
+            renderIngredients();
+            ingredientRows.querySelectorAll('.link-btn')[draft.ingredients.indexOf(ing)]?.focus();
+          });
+          break;
+        }
+        case 'unlink-ingredient':
+          draft.ingredients[i].recipeId = null; // the typed name stays
+          renderIngredients();
+          ingredientRows.querySelectorAll('.link-btn')[i]?.focus();
+          break;
         case 'add-step':
           draft.steps.push(Model.newStep());
           renderSteps();
@@ -686,6 +772,10 @@
 
       // Drop blank rows, and drop step references to ingredients that no
       // longer exist (keeps the future step→ingredient links tidy).
+      // A linked row left without a name takes the linked recipe's title.
+      draft.ingredients.forEach((i) => {
+        if (i.recipeId && !i.name && recipeById.has(i.recipeId)) i.name = recipeById.get(i.recipeId).title;
+      });
       draft.ingredients = draft.ingredients.filter((i) => i.name || i.amount);
       const ingredientIds = new Set(draft.ingredients.map((i) => i.id));
       draft.steps = draft.steps
@@ -694,12 +784,76 @@
 
       const saved = await DB.saveRecipe(draft);
       // replace() so Back from the detail screen doesn't return to the form.
-      location.replace(`#/recipe/${encodeURIComponent(saved.id)}`);
+      location.replace(recipeHash(saved.id, trail));
     }
 
     renderIngredients();
     renderSteps();
     if (!existing) form.elements.title.focus();
+  }
+
+  /**
+   * Choose a recipe for an ingredient to link to. Lists only recipes with
+   * meal type Other, A to Z, never `excludeId` (the recipe being edited),
+   * with a search box. Resolves to the chosen recipe, or null if cancelled.
+   */
+  function pickRecipe(recipes, { excludeId, currentId }) {
+    const options = recipes
+      .filter((x) => x.mealType === 'other' && x.id !== excludeId)
+      .sort(byTitle);
+    return new Promise((resolve) => {
+      let picked = null;
+      const dialog = document.createElement('dialog');
+      dialog.className = 'dialog picker';
+      dialog.id = 'recipe-picker';
+      dialog.setAttribute('aria-labelledby', 'recipe-picker-title');
+      dialog.innerHTML = `
+        <form method="dialog">
+          <h3 id="recipe-picker-title">Link to a recipe</h3>
+          <p class="muted">Recipes in the Other category, like sauces and broths.</p>
+          ${options.length ? `
+            <input type="search" class="tag-search" id="picker-search" placeholder="Search recipes"
+                   aria-label="Search recipes" autocomplete="off" enterkeyhint="search">` : ''}
+          <div class="picker-list" id="picker-list" aria-live="polite"></div>
+          <button class="btn btn-secondary" value="cancel">Cancel</button>
+        </form>`;
+      document.body.append(dialog);
+
+      const search = dialog.querySelector('#picker-search');
+      const list = dialog.querySelector('#picker-list');
+      function render() {
+        const query = search ? search.value.trim().toLowerCase() : '';
+        const matches = query ? options.filter((x) => x.title.toLowerCase().includes(query)) : options;
+        if (!options.length) {
+          list.innerHTML = `<p class="picker-empty">No recipes in the Other category yet. Save a recipe
+            with meal type <strong>Other</strong> (for example a sauce or broth) to link to it.</p>`;
+        } else if (!matches.length) {
+          list.innerHTML = '<p class="muted picker-empty">No Other recipes match your search.</p>';
+        } else {
+          list.innerHTML = `<ul>${matches.map((x) => `
+            <li><button type="button" class="picker-option" data-pick="${esc(x.id)}"
+                        ${x.id === currentId ? 'aria-current="true"' : ''}>
+              <span>${esc(x.title || 'Untitled')}</span>
+              ${x.id === currentId ? '<span class="muted">Linked</span>' : ''}
+            </button></li>`).join('')}</ul>`;
+        }
+      }
+      search?.addEventListener('input', render);
+      // Return in the search box shouldn't close the picker.
+      search?.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+      list.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-pick]');
+        if (!btn) return;
+        picked = options.find((x) => x.id === btn.dataset.pick) || null;
+        dialog.close('pick');
+      });
+      dialog.addEventListener('close', () => {
+        dialog.remove();
+        resolve(picked);
+      });
+      render();
+      dialog.showModal();
+    });
   }
 
   /* ------------------------------------------------------------------ */
@@ -884,15 +1038,17 @@
   /* ------------------------------------------------------------------ */
 
   async function route() {
-    // "#/edit/abc" → ["edit", "abc"]
-    const [page, rawId] = location.hash.replace(/^#\/?/, '').split('/');
+    // "#/edit/abc?from=xyz" → ["edit", "abc"] and trail ["xyz"]
+    const [path, query = ''] = location.hash.replace(/^#\/?/, '').split('?');
+    const [page, rawId] = path.split('/');
     const id = rawId ? decodeURIComponent(rawId) : null;
+    const trail = new URLSearchParams(query).getAll('from').filter(Boolean).slice(0, MAX_TRAIL);
 
     try {
       if (!page) await showList();
-      else if (page === 'recipe' && id) await showDetail(id);
+      else if (page === 'recipe' && id) await showDetail(id, trail);
       else if (page === 'new') await showForm(null);
-      else if (page === 'edit' && id) await showForm(id);
+      else if (page === 'edit' && id) await showForm(id, trail);
       else if (page === 'backup') await showBackup();
       else if (page === 'tags') await showTags();
       else showNotFound();

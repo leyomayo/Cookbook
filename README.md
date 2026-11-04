@@ -15,6 +15,8 @@ IndexedDB storage. No servers, no accounts, no cloud services.
   an ingredient list, and numbered directions you can reorder
 - **Recipe detail** page. On iPad the ingredients and directions sit side by side.
 - **Tag list** that starts with 46 common tags and grows as you add your own
+- **Recipe links**: an ingredient can link to a recipe in the Other category,
+  so a homemade sauce or broth opens its own recipe
 - **Backup, sharing and import** of recipe files
 
 ## Tags
@@ -38,6 +40,41 @@ IndexedDB storage. No servers, no accounts, no cloud services.
   takes you back to the list.
 - While a tag filter is on, the list shows a highlighted bar with the chosen
   tags. Tap a tag's ✕ to remove it, or **Clear** to remove them all.
+
+## Recipe links
+
+Use recipe links for homemade ingredients, like a sauce, broth or dough
+that has its own recipe. Save that recipe with the meal type **Other**
+first.
+
+- In the add / edit form, tap **🔗** on an ingredient row. The picker lists
+  your **Other** recipes A to Z, with a search box. It never lists the recipe
+  you're editing. If you have no Other recipes yet, the picker says so.
+- Pick a recipe to link it. If the ingredient's name is blank, it's filled in
+  with the recipe's title. A name you already typed is never changed.
+- A linked row shows **Links to** and the recipe's name. Tap **Unlink** to make it plain
+  text again (the name stays). Links move with their row and are saved with
+  the recipe.
+- On the recipe page a linked ingredient is underlined with a **›**. Tap it to
+  open that recipe. **Back** returns to the recipe you came from, even after a
+  reload or an edit.
+
+How links behave:
+
+- **Rename** the linked recipe: the link still works (it uses the recipe's id).
+  The ingredient keeps its own name.
+- **Delete** the linked recipe: the delete confirmation lists the recipes
+  that link to it. Their linked ingredients become plain text, in the same
+  step as the delete.
+- The browser's own back (or swipe back) also works, because each link is a
+  normal page change in the app's address.
+- **Change the meal type** of a linked recipe away from Other: links to it keep
+  working. It just stops appearing in the picker.
+- Other recipes can link to each other, even in a loop. A recipe can't link
+  to itself.
+- If a link points to a recipe that isn't on this device (for example a shared
+  recipe whose linked recipe you didn't import), the ingredient shows as plain
+  text. The link is kept, so it works again if you import that recipe later.
 
 ## Backup, sharing and import
 
@@ -135,7 +172,9 @@ on `localhost`.
 `tests/app.test.js` drives the app in Chromium (emulating iPhone 13 and iPad
 Pro) with [Playwright](https://playwright.dev). It isn't part of the app.
 Serve the repository on port 8765 (`python3 -m http.server 8765`), then run
-`node tests/app.test.js`. See the top of that file for setup.
+`node tests/app.test.js`. It runs every check on both profiles; add a
+screenshot folder and `iphone` or `ipad` to run one. See the top of that
+file for setup.
 
 ## Project layout
 
@@ -148,7 +187,8 @@ js/model.js            Recipe data shape, defaults, schema upgrades (normalizeRe
 js/tags.js             Starter tags, tag list helpers, the tag editor
 js/transfer.js         Export/share/import: file names and format, checks, conflict handling
 js/db.js               IndexedDB storage: recipes and the tag list
-js/app.js              Screens and hash-based navigation (#/, #/tags, #/recipe/<id>, #/new, #/edit/<id>, #/backup)
+js/app.js              Screens and hash-based navigation (#/, #/tags, #/recipe/<id>, #/new, #/edit/<id>, #/backup).
+                       Following a recipe link adds ?from=<id> to the hash so Back can return.
 icons/                 Home Screen and manifest icons
 tests/app.test.js      Browser tests (not loaded by the app)
 ```
@@ -156,13 +196,13 @@ tests/app.test.js      Browser tests (not loaded by the app)
 ## Data model
 
 Each recipe is stored as one object (described in full in `js/model.js`).
-Two fields are stored now but not used yet, so later features won't need a
-data migration:
 
-- **`ingredient.recipeId`**: will link an ingredient to another recipe
-  (for example "pizza dough" → your Pizza Dough recipe).
-- **`step.ingredientIds`**: will list the ingredients a direction step uses,
-  for a tap-to-see-ingredients popup.
+- **`ingredient.recipeId`**: the id of the recipe this ingredient links to
+  (for example "pizza dough" → your Pizza Dough recipe), or `null`. See
+  "Recipe links" above. Deleting a recipe sets links to it back to `null`.
+- **`step.ingredientIds`**: stored now but not used yet, so a later feature
+  won't need a data migration. It will list the ingredients a direction step
+  uses, for a tap-to-see-ingredients popup.
 
 Every ingredient and step has a stable `id`, so these links keep working when
 you reorder the lists. Editing a recipe keeps whatever values these fields
