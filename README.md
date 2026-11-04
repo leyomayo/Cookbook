@@ -15,6 +15,7 @@ IndexedDB storage. No servers, no accounts, no cloud services.
 - **Add / edit form**: title, meal type, prep time, cook time, servings, tags,
   an ingredient list, and numbered directions you can reorder
 - **Recipe detail** page. On iPad the ingredients and directions sit side by side.
+  Tap a direction step to see the ingredients it uses.
 - **Tag list** that starts with 46 common tags and grows as you add your own
 - **Recipe links**: an ingredient can link to a recipe in the Other category,
   so a homemade sauce or broth opens its own recipe
@@ -76,6 +77,29 @@ How links behave:
 - If a link points to a recipe that isn't on this device (for example a shared
   recipe whose linked recipe you didn't import), the ingredient shows as plain
   text. The link is kept, so it works again if you import that recipe later.
+
+## Step ingredients
+
+On a recipe page, tap a direction step to see the ingredients it uses. Its
+number turns a lighter orange. Tap it again to clear it, or tap another step.
+
+- **iPad** (side by side): the step's ingredients are highlighted in the
+  ingredient list.
+- **iPhone**: a bar at the bottom of the screen shows the step's ingredients
+  with their amounts. Swipe it sideways if they don't all fit. It's hidden when
+  no step is selected or the step mentions no ingredient.
+
+Linked ingredients (see "Recipe links") are still links in both places.
+
+Ingredients are found by keyword, so nothing needs to be set up and existing
+recipes work as they are. A step mentions an ingredient when it contains any
+word of the ingredient's name, ignoring case, amounts and simple plurals
+("onions" finds "onion"). Filler words in the name, such as units ("cup",
+"tsp") and words like "fresh", "chopped" or "large", don't count on their own.
+Because it's word based, a step that says "pepper" finds both "black pepper"
+and "bell pepper", and a step that says "the sauce" finds nothing unless an
+ingredient is called sauce. The rules live in `js/match.js` so other features
+can reuse them.
 
 ## Backup, sharing and adding from a file
 
@@ -196,6 +220,7 @@ manifest.webmanifest   Name, icons and display mode for installing
 sw.js                  Service worker: offline caching of the app files
 css/styles.css         All styles. Mobile first, with a wider layout for iPad.
 js/model.js            Recipe data shape, defaults, schema upgrades (normalizeRecipe)
+js/match.js            Keyword matching (which ingredients a step mentions), reusable
 js/tags.js             Starter tags, tag list helpers, the tag editor
 js/transfer.js         Export/share/import: file names and format, checks, conflict handling
 js/db.js               IndexedDB storage: recipes and the tag list
@@ -212,9 +237,9 @@ Each recipe is stored as one object (described in full in `js/model.js`).
 - **`ingredient.recipeId`**: the id of the recipe this ingredient links to
   (for example "pizza dough" → your Pizza Dough recipe), or `null`. See
   "Recipe links" above. Deleting a recipe sets links to it back to `null`.
-- **`step.ingredientIds`**: stored now but not used yet, so a later feature
-  won't need a data migration. It will list the ingredients a direction step
-  uses, for a tap-to-see-ingredients popup.
+- **`step.ingredientIds`**: stored but not used. Step ingredients are found by
+  keyword instead (see "Step ingredients"). Kept so existing data and files
+  stay valid.
 
 Every ingredient and step has a stable `id`, so these links keep working when
 you reorder the lists. Editing a recipe keeps whatever values these fields

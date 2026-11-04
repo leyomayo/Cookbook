@@ -419,6 +419,24 @@
       ['Serves', r.servings ?? ''],
     ].filter(([, v]) => v !== '');
 
+    // A link to a recipe that isn't on this device shows as plain text; the
+    // link is kept in case that recipe is imported later.
+    const linkTarget = (i) => i.recipeId && byId.get(i.recipeId);
+    const displayName = (i) => i.name || linkTarget(i)?.title || '';
+    /** The ingredient's name: a link to its recipe when it has one, else text. */
+    function ingredientName(i, linkClass) {
+      const target = linkTarget(i);
+      return target
+        ? `<a class="${linkClass}" href="${esc(recipeHash(target.id, [r.id, ...trail]))}"
+              aria-label="${esc(displayName(i))}, open recipe ${esc(target.title)}">
+             ${esc(displayName(i))}
+           </a>`
+        : `<span>${esc(i.name)}</span>`;
+    }
+
+    // Ingredients each step mentions, found by keyword (see js/match.js).
+    const stepMatches = new Map(r.steps.map((s) => [s.id, Match.byKeyword(s.text, r.ingredients, displayName)]));
+
     view.innerHTML = `
       <article class="detail">
         <div class="detail-head">
@@ -437,33 +455,29 @@
             <h3>Ingredients</h3>
             ${r.ingredients.length ? `
               <ul class="ingredient-list">
-                ${r.ingredients.map((i) => {
-                  // A link to a recipe that isn't on this device shows as plain
-                  // text; the link is kept in case that recipe is imported later.
-                  const target = i.recipeId && byId.get(i.recipeId);
-                  const name = target
-                    ? `<a class="ing-link" href="${esc(recipeHash(target.id, [r.id, ...trail]))}"
-                          aria-label="${esc(i.name || target.title)}, open recipe ${esc(target.title)}">
-                         ${esc(i.name || target.title)}
-                       </a>`
-                    : `<span>${esc(i.name)}</span>`;
-                  return `
-                  <li data-ingredient-id="${esc(i.id)}"${target ? ' class="is-linked"' : ''}>
+                ${r.ingredients.map((i) => `
+                  <li data-ingredient-id="${esc(i.id)}"${linkTarget(i) ? ' class="is-linked"' : ''}>
                     ${i.amount ? `<span class="amount">${esc(i.amount)}</span>` : ''}
-                    ${name}
-                  </li>`;
-                }).join('')}
+                    ${ingredientName(i, 'ing-link')}
+                  </li>`).join('')}
               </ul>` : '<p class="muted">No ingredients listed.</p>'}
           </section>
 
           <section class="panel">
             <h3>Directions</h3>
             ${r.steps.length ? `
+              <p class="muted step-hint">Tap a step to see its ingredients.</p>
               <ol class="step-list">
-                ${r.steps.map((s) => `<li data-step-id="${esc(s.id)}">${esc(s.text)}</li>`).join('')}
+                ${r.steps.map((s) => `
+                  <li data-step-id="${esc(s.id)}">
+                    <button type="button" class="step-btn" data-step="${esc(s.id)}" aria-pressed="false">${esc(s.text)}</button>
+                  </li>`).join('')}
               </ol>` : '<p class="muted">No directions yet.</p>'}
           </section>
         </div>
+
+        <!-- iPhone: the selected step's ingredients, fixed to the bottom of the screen. -->
+        <div class="step-bar" id="step-bar" hidden></div>
 
         <div class="detail-actions">
           <button type="button" class="btn btn-secondary" id="share-btn">Share recipe</button>
@@ -472,6 +486,50 @@
         </div>
       </article>
     `;
+
+    /*
+     * Step selection: tap a step to select it, tap it again to clear, or tap
+     * another step to move the selection. The selected step's ingredients
+     * are highlighted in the list (iPad) and shown in the bottom bar
+     * (iPhone); CSS decides which one is visible at each width.
+     */
+    const stepBar = view.querySelector('#step-bar');
+    let selectedStep = null;
+
+    function renderStepSelection() {
+      const matches = selectedStep ? stepMatches.get(selectedStep) : [];
+      const matchIds = new Set(matches.map((i) => i.id));
+      view.querySelectorAll('.step-btn').forEach((btn) => {
+        const on = btn.dataset.step === selectedStep;
+        btn.setAttribute('aria-pressed', String(on));
+        btn.closest('li').classList.toggle('is-selected', on);
+      });
+      view.querySelectorAll('.ingredient-list li').forEach((li) => {
+        li.classList.toggle('is-match', matchIds.has(li.dataset.ingredientId));
+      });
+
+      stepBar.hidden = !matches.length;
+      view.querySelector('.detail').classList.toggle('has-step-bar', matches.length > 0);
+      if (!matches.length) { stepBar.innerHTML = ''; return; }
+      const n = r.steps.findIndex((s) => s.id === selectedStep) + 1;
+      stepBar.innerHTML = `
+        <span class="step-bar-label">Step ${n}</span>
+        <ul class="step-bar-list" aria-label="Ingredients for step ${n}">
+          ${matches.map((i) => `
+            <li class="step-chip${linkTarget(i) ? ' is-linked' : ''}">
+              ${i.amount ? `<span class="amount">${esc(i.amount)}</span>` : ''}
+              ${ingredientName(i, 'ing-link')}
+            </li>`).join('')}
+        </ul>`;
+      stepBar.querySelector('.step-bar-list').scrollLeft = 0;
+    }
+
+    view.querySelector('.step-list')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.step-btn');
+      if (!btn) return;
+      selectedStep = selectedStep === btn.dataset.step ? null : btn.dataset.step;
+      renderStepSelection();
+    });
 
     view.querySelector('#share-btn').addEventListener('click', () => {
       Transfer.deliver(Transfer.shareFileName(r), shareData, r.title)

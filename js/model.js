@@ -32,13 +32,13 @@
  *   Step = {
  *     id:            "s_…"
  *     text:          "Whisk the dry ingredients."
- *     ingredientIds: []   FUTURE: ids of ingredients used in this step, for a
- *                         tap-to-see-ingredients popup. Not used by the UI yet.
+ *     ingredientIds: []   Not used. Was planned for a step popup; the recipe
+ *                         screen now finds a step's ingredients by keyword
+ *                         instead (js/match.js). Kept so data and files stay valid.
  *   }
  *
- * The future field (ingredientIds) is stored now (as empty) so that adding
- * that feature later needs no data migration, and editing a recipe in this
- * version keeps whatever values it already holds.
+ * ingredientIds is still stored (usually empty), and editing a recipe keeps
+ * whatever values it already holds.
  *
  * Schema history:
  *   1  first version. Tags were lower-cased, typed as comma-separated text.

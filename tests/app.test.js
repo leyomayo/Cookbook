@@ -11,7 +11,8 @@
  * the v1 → v2 data upgrade, the tag editor, the Tags filter screen, .recipe /
  * .cookbook export and the share-sheet fallbacks, import checks and the
  * "Import complete" counts, importing old .json files, offline loading with
- * the current cache, and recipe links (section G).
+ * the current cache, recipe links (section G) and step ingredient
+ * highlighting (section H).
  */
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -334,11 +335,11 @@ async function suite(browser, tag, device) {
   await page.screenshot({ path: SP + `/${tag}-v3-list-2.png` });
 
 
-  // ---------- F. Offline with cache v6 ----------
+  // ---------- F. Offline with cache v7 ----------
   await page.goto(URL0); await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload(); await page.waitForSelector('.card');
   const keys = await page.evaluate(() => caches.keys());
-  ok(JSON.stringify(keys) === '["cookbook-v6"]', 'only cache cookbook-v6', keys);
+  ok(JSON.stringify(keys) === '["cookbook-v7"]', 'only cache cookbook-v7', keys);
   await ctx.setOffline(true);
   for (const h of ['#/', '#/tags', '#/backup', '#/new']) {
     await page.goto(URL0 + h); await page.reload();
@@ -351,6 +352,9 @@ async function suite(browser, tag, device) {
 
   // ---------- G. Recipe links ----------
   await linkTests(browser, tag, device, errors);
+
+  // ---------- H. Step ingredients ----------
+  await stepTests(browser, tag, device, errors);
 
   ok(errors.length === 0, `${tag}: no page errors`, errors);
 }
@@ -604,5 +608,163 @@ async function linkTests(browser, tag, device, errors) {
   await page.screenshot({ path: SP + `/${tag}-links-form-dark.png`, fullPage: true });
   await linkBtn(0); await page.waitForSelector('#recipe-picker[open]');
   await page.screenshot({ path: SP + `/${tag}-links-picker-dark.png` });
+  await ctx.close();
+}
+
+
+/*
+ * H. Step ingredients: tap a direction step to see the ingredients it uses.
+ * iPad highlights them in the list; iPhone shows them in a bar at the bottom.
+ * Uses realistic recipes saved in the existing shape (no step.ingredientIds).
+ */
+async function stepTests(browser, tag, device, errors) {
+  const ctx = await browser.newContext({ ...devices[device] });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(e.message));
+  const T = (msg) => `steps (${tag}): ${msg}`;
+  const wide = tag === 'ipad';
+  await page.goto(URL0); await page.waitForSelector('#recipe-grid');
+
+  // ---- The matching function on its own ----
+  const m = await page.evaluate(() => {
+    const ing = [
+      { id: 'a', amount: '1/2 cup', name: 'butter' }, { id: 'b', amount: '1 tsp', name: 'salt' },
+      { id: 'c', amount: '2', name: 'onions' }, { id: 'd', amount: '1 lb', name: 'Tomatoes' },
+      { id: 'e', amount: '1 cup', name: 'blueberries' }, { id: 'f', amount: '', name: 'fresh basil' },
+      { id: 'g', amount: '3', name: 'cloves' }, { id: 'h', amount: '1 tbsp', name: 'baking powder' },
+    ];
+    const ids = (text) => Match.byKeyword(text, ing).map(i => i.id).join('');
+    return {
+      example: ids('Combine butter with salt'),
+      plural: ids('Chop the onion.'), case: ids('Add the TOMATO.'), berry: ids('Fold in a blueberry'),
+      filler: ids('Add fresh water'), fillerOnly: ids('Stud the ham with cloves'),
+      amounts: ids('Add 1/2 cup and 1 tsp of water'), salted: ids('Boil in salted water'),
+      baking: ids('Pour into a baking dish'), powder: ids('Sift in the baking powder'),
+      reuse: Match.byKeyword('Tomato basil soup', ['Tomato', 'Basil', 'Beef'], x => x),
+    };
+  });
+  ok(m.example === 'ab', T('"Combine butter with salt" matches butter and salt'), m.example);
+  ok(m.plural === 'c' && m.case === 'd' && m.berry === 'e', T('plurals and case are ignored'), m);
+  ok(m.filler === '' && m.fillerOnly === 'g', T('filler words (fresh, units) don\'t match on their own'), m);
+  ok(m.amounts === '', T('amounts and units in the step match nothing'), m.amounts);
+  ok(m.salted === '' && m.baking === '' && m.powder === 'h', T('"salted" ≠ salt; "baking dish" ≠ baking powder'), m);
+  ok(JSON.stringify(m.reuse) === '["Tomato","Basil"]', T('works on plain names too (for reuse)'), m.reuse);
+
+  // ---- Real recipes, stored in the existing shape ----
+  await page.evaluate(async () => {
+    const ing = (id, amount, name, recipeId = null) => ({ id, amount, name, recipeId });
+    const step = (id, text) => ({ id, text, ingredientIds: [] });
+    const base = { ...Model.newRecipe(), mealType: 'dinner' };
+    await DB.saveRecipe({ ...base, id: 'rPesto', title: 'Basil Pesto', mealType: 'other',
+      ingredients: [ing('p1', '2 cups', 'fresh basil'), ing('p2', '1/3 cup', 'pine nuts')], steps: [step('ps1', 'Blend the basil and pine nuts.')] });
+    await DB.saveRecipe({ ...base, id: 'rPasta', title: 'Garlic Butter Pasta', ingredients: [
+      ing('a1', '8 oz', 'spaghetti'), ing('a2', '1/2 cup', 'butter'), ing('a3', '4 cloves', 'garlic, minced'),
+      ing('a4', '1 tsp', 'salt'), ing('a5', '1/4 cup', 'fresh parsley'), ing('a6', '1/2 cup', 'grated parmesan cheese'),
+      ing('a7', '3 tbsp', '', 'rPesto'),
+    ], steps: [
+      step('s1', 'Boil the spaghetti in salted water until al dente.'),
+      step('s2', 'Combine butter with salt in a pan and melt.'),
+      step('s3', 'Add the garlic and cook for 1 minute.'),
+      step('s4', 'Toss the pasta with the pesto, then sprinkle with parsley and cheese.'),
+      step('s5', 'Serve right away.'),
+    ] });
+    await DB.saveRecipe({ ...base, id: 'rSoup', title: 'Tomato Soup', mealType: 'lunch', ingredients: [
+      ing('t1', '2 lb', 'ripe tomatoes'), ing('t2', '1', 'yellow onion'), ing('t3', '2 cups', 'vegetable broth'),
+      ing('t4', '1 tbsp', 'olive oil'), ing('t5', '2', 'carrots'), ing('t6', '1 tsp', 'smoked paprika'),
+    ], steps: [
+      step('u1', 'Chop the onions and the carrot.'),
+      step('u2', 'Put the tomatoes, broth, oil, onion, carrots and paprika in a pot and simmer for 20 minutes.'),
+      step('u3', 'Blend until smooth.'),
+    ] });
+  });
+  const before = await page.evaluate(() => DB.getAllRecipes());
+  const open = async (id) => { await page.goto(URL0 + '#/recipe/' + id); await page.reload(); await page.waitForSelector('.step-btn'); };
+  const tapStep = (n) => page.click(`.step-list li:nth-child(${n}) .step-btn`);
+  const state = () => page.evaluate(() => {
+    const bar = document.querySelector('#step-bar');
+    const r = bar.getBoundingClientRect();
+    return {
+      selected: [...document.querySelectorAll('.step-list li')].map((li, n) => li.classList.contains('is-selected') ? n + 1 : 0).filter(Boolean),
+      pressed: [...document.querySelectorAll('.step-btn[aria-pressed=true]')].length,
+      listMatches: [...document.querySelectorAll('.ingredient-list li.is-match')].map(li => li.dataset.ingredientId),
+      barShown: getComputedStyle(bar).display !== 'none',
+      barChips: [...bar.querySelectorAll('.step-chip')].map(c => c.textContent.replace(/\s+/g, ' ').trim()),
+      barAtBottom: Math.round(r.bottom) === innerHeight && getComputedStyle(bar).position === 'fixed',
+      numberColor: (() => { const li = document.querySelector('.step-list li.is-selected'); return li && getComputedStyle(li, '::before').backgroundColor; })(),
+      plainColor: getComputedStyle(document.querySelector('.step-list li:not(.is-selected)'), '::before').backgroundColor,
+    };
+  });
+
+  await open('rPasta');
+  let s = await state();
+  ok(!s.selected.length && !s.barShown && !s.listMatches.length, T('nothing selected at first, no bar'), s);
+
+  await tapStep(2); s = await state();
+  ok(s.selected.join() === '2' && s.pressed === 1, T('tapping a step selects it'), s);
+  ok(s.listMatches.join() === 'a2,a4', T('step 2 finds butter and salt'), s.listMatches);
+  ok(s.plainColor === 'rgb(180, 83, 42)' && s.numberColor === 'rgb(240, 179, 147)', T('selected step number turns a lighter orange'), s);
+  if (wide) {
+    ok(!s.barShown, T('iPad: no bottom bar'), s);
+    const bg = await page.$eval('.ingredient-list li.is-match', li => getComputedStyle(li).backgroundColor);
+    const plain = await page.$eval('.ingredient-list li:not(.is-match)', li => getComputedStyle(li).backgroundColor);
+    ok(bg !== plain && bg === 'rgb(251, 227, 212)', T('iPad: matched ingredients are highlighted'), { bg, plain });
+  } else {
+    ok(s.barShown && s.barAtBottom, T('iPhone: bar fixed to the bottom of the screen'), s);
+    ok(JSON.stringify(s.barChips) === '["1/2 cup butter","1 tsp salt"]', T('iPhone: bar lists each ingredient with its amount'), s.barChips);
+  }
+  await page.screenshot({ path: SP + `/${tag}-steps-selected.png` });
+
+  await tapStep(2); s = await state();
+  ok(!s.selected.length && !s.barShown && !s.listMatches.length, T('tapping it again clears the selection'), s);
+  await tapStep(1); await tapStep(3); s = await state();
+  ok(s.selected.join() === '3' && s.pressed === 1 && s.listMatches.join() === 'a3', T('tapping another step moves the selection'), s);
+  ok(!wide ? JSON.stringify(s.barChips) === '["4 cloves garlic, minced"]' : true, T('step 3 shows the garlic'), s.barChips);
+  await tapStep(1); s = await state();
+  ok(s.listMatches.join() === 'a1', T('"salted water" doesn\'t match salt'), s.listMatches);
+  await tapStep(5); s = await state();
+  ok(s.selected.join() === '5' && !s.barShown && !s.listMatches.length, T('step with no matches: selected, bar hidden'), s);
+
+  // Linked homemade ingredient (pesto, name blank → recipe title) stays a link.
+  await tapStep(4); s = await state();
+  ok(s.listMatches.join() === 'a5,a6,a7', T('step 4 finds parsley, cheese and the linked pesto'), s.listMatches);
+  const linkSel = wide ? '.ingredient-list li.is-match .ing-link' : '#step-bar .ing-link';
+  ok((await page.$$(linkSel)).length === 1, T('linked ingredient is still a link when highlighted'));
+  await page.click(linkSel); await page.waitForSelector('.detail-title:has-text("Basil Pesto")');
+  ok(/#\/recipe\/rPesto\?from=rPasta/.test(page.url()), T('tapping it opens the linked recipe'), page.url());
+  ok((await page.$$('#step-bar:not([hidden])')).length === 0, T('selection doesn\'t carry over to the linked recipe'));
+  await page.click('#header-left a'); await page.waitForSelector('.detail-title:has-text("Garlic Butter Pasta")');
+
+  // Second recipe: plurals both ways, long step scrolls sideways on iPhone.
+  await open('rSoup');
+  await tapStep(1); s = await state();
+  ok(s.listMatches.join() === 't2,t5', T('"onions"/"carrot" match "onion"/"carrots"'), s.listMatches);
+  await tapStep(2); s = await state();
+  ok(s.listMatches.join() === 't1,t2,t3,t4,t5,t6', T('long step finds all six ingredients, in list order'), s.listMatches);
+  if (!wide) {
+    const scroll = await page.$eval('.step-bar-list', el => ({ sw: el.scrollWidth, cw: el.clientWidth, ox: getComputedStyle(el).overflowX }));
+    ok(scroll.sw > scroll.cw && scroll.ox === 'auto', T('iPhone: bar scrolls sideways when the chips don\'t fit'), scroll);
+    await page.$eval('.step-bar-list', el => { el.scrollLeft = 9999; });
+    ok(await page.$eval('.step-bar-list', el => el.scrollLeft > 0), T('iPhone: bar can be scrolled'));
+    const pageScroll = await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+    ok(pageScroll, T('iPhone: page itself doesn\'t scroll sideways'));
+    // Bar doesn't cover the last buttons when scrolled to the bottom.
+    await page.evaluate(() => scrollTo(0, document.body.scrollHeight));
+    const cover = await page.evaluate(() => document.querySelector('#delete-btn').getBoundingClientRect().bottom <= document.querySelector('#step-bar').getBoundingClientRect().top);
+    ok(cover, T('iPhone: bar doesn\'t cover Delete at the bottom of the page'));
+  }
+  await page.screenshot({ path: SP + `/${tag}-steps-soup.png` });
+
+  // Keyboard: steps are buttons, so Enter selects.
+  await page.focus('.step-list li:nth-child(1) .step-btn'); await page.keyboard.press('Enter'); s = await state();
+  ok(s.selected.join() === '1', T('a step can be selected with the keyboard'), s);
+
+  // Dark mode: selected number is still lighter than the others.
+  await page.emulateMedia({ colorScheme: 'dark' }); s = await state();
+  ok(s.plainColor === 'rgb(224, 122, 75)' && s.numberColor === 'rgb(246, 195, 168)', T('dark mode: selected number is lighter'), s);
+  await page.screenshot({ path: SP + `/${tag}-steps-dark.png` });
+
+  // Viewing and selecting never changes stored recipes.
+  const after = await page.evaluate(() => DB.getAllRecipes());
+  ok(JSON.stringify(after) === JSON.stringify(before), T('recipes are unchanged in storage'));
   await ctx.close();
 }
