@@ -16,6 +16,10 @@
   --accent: #b4532a;
   --accent-text: #ffffff;
   --danger: #b3261e;
+  /* Selected direction step, and the ingredients it uses. */
+  --step-selected: #f0b393;
+  --step-selected-text: #2a211b;
+  --match-bg: #fbe3d4;
 
   /* Meal type badge colors */
   --breakfast: #c98a12;
@@ -43,6 +47,9 @@
     --accent: #e07a4b;
     --accent-text: #1c1917;
     --danger: #f2706a;
+    --step-selected: #f6c3a8;
+    --step-selected-text: #1c1917;
+    --match-bg: #4a3227;
   }
 }
 
@@ -321,6 +328,82 @@ input, textarea, select, button { font: inherit; color: inherit; }
   font-size: 15px;
 }
 
+/* ---------- Step ingredients: tap a step to see what it uses ---------- */
+
+.step-hint { margin: -6px 0 12px; font-size: 15px; }
+
+/* The whole step is the button; it looks like plain text. */
+.step-btn {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  line-height: inherit;
+  cursor: pointer;
+}
+/* Selected step: its number turns from dark orange to a lighter shade. */
+.step-list li.is-selected::before {
+  background: var(--step-selected);
+  color: var(--step-selected-text);
+}
+
+/* iPhone: a bar fixed to the bottom, scrolling sideways through the
+   selected step's ingredients. Hidden on iPad (see the wide layout). */
+.step-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0 calc(10px + env(safe-area-inset-bottom)) calc(var(--gutter) + env(safe-area-inset-left));
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.08);
+}
+.step-bar[hidden] { display: none; }
+.step-bar-label {
+  flex: none;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.step-bar-list {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 0 calc(var(--gutter) + env(safe-area-inset-right)) 0 0;
+  list-style: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.step-bar-list::-webkit-scrollbar { display: none; }
+.step-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--match-bg);
+  white-space: nowrap;
+  font-size: 15px;
+}
+.step-chip .amount { min-width: 0; }
+.step-chip .ing-link { min-height: 38px; }
+/* Room at the bottom so the bar never covers the last buttons. */
+.detail.has-step-bar { padding-bottom: 72px; }
+
 
 /* ---------- Form screen ---------- */
 
@@ -415,6 +498,17 @@ input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 
   .detail-title { font-size: 36px; }
   /* Ingredients beside directions, so both are visible while cooking. */
   .detail-body { grid-template-columns: minmax(260px, 2fr) 3fr; }
+  /* The selected step's ingredients are highlighted in the list instead of the bar. */
+  .step-bar, .step-bar[hidden] { display: none; }
+  .detail.has-step-bar { padding-bottom: 0; }
+  .ingredient-list li.is-match {
+    margin: 0 -8px;
+    padding-left: 8px;
+    padding-right: 8px;
+    border-radius: 8px;
+    background: var(--match-bg);
+    font-weight: 600;
+  }
 
   .form { max-width: 820px; margin: 0 auto; }
   /* Tools sit at the end of the row instead of wrapping below. */
