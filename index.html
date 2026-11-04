@@ -1,5 +1,9 @@
 <!doctype html>
-<html lang="en">
+<!-- "booting" hides the header and screen until the first screen is drawn at
+     normal zoom (js/app.js removes it). On a cold launch iPadOS can paint a
+     frame before the viewport setting below applies, which looked like a
+     zoomed-in flash. CSS reveals the page anyway after 1.5 s as a fallback. -->
+<html lang="en" class="booting">
 <head>
   <meta charset="utf-8">
   <!-- viewport-fit=cover lets the layout extend under the iPhone notch;
