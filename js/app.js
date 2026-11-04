@@ -12,7 +12,8 @@
  *                    Back walks it, so it survives reloads and edits)
  *   #/new            add recipe form
  *   #/edit/<id>      edit recipe form (keeps the detail screen's ?from= trail)
- *   #/backup         export and import files
+ *   #/backup         export a backup, restore from a backup
+ *                    (+ Add on the list adds recipes from any Cookbook file)
  *
  * Each screen is a function that fills <main id="view"> and sets the header.
  * User text is always passed through esc() before it goes into HTML.
@@ -174,7 +175,7 @@
     setHeader({
       title: 'Cookbook',
       left: { label: 'Backup', href: '#/backup' },
-      action: { label: '+ Add', onClick: () => go('#/new') },
+      action: { label: '+ Add', onClick: showAddChoice },
     });
 
     const recipes = await DB.getAllRecipes();
@@ -251,7 +252,7 @@
             ${tagFilter.length
               ? '<button type="button" class="btn btn-secondary" data-clear-tags>Clear tag filter</button>'
               : '<a class="btn btn-primary" href="#/new">Add a recipe</a>'}
-            ${recipes.length ? '' : '<p><a href="#/backup">Import recipes from a file</a></p>'}
+            ${recipes.length ? '' : '<p><button type="button" class="btn-link btn-link-accent" data-add-choice>Add recipes from a file</button></p>'}
           </li>`;
         return;
       }
@@ -283,6 +284,9 @@
         tagFilter = tagFilter.filter((k) => k !== untag.dataset.untag);
       } else if (e.target.closest('[data-clear-tags]')) {
         tagFilter = [];
+      } else if (e.target.closest('[data-add-choice]')) {
+        showAddChoice();
+        return;
       } else {
         return;
       }
@@ -440,7 +444,7 @@
                   const name = target
                     ? `<a class="ing-link" href="${esc(recipeHash(target.id, [r.id, ...trail]))}"
                           aria-label="${esc(i.name || target.title)}, open recipe ${esc(target.title)}">
-                         <span>${esc(i.name || target.title)}</span><span class="ing-link-icon" aria-hidden="true">›</span>
+                         ${esc(i.name || target.title)}
                        </a>`
                     : `<span>${esc(i.name)}</span>`;
                   return `
@@ -857,7 +861,7 @@
   }
 
   /* ------------------------------------------------------------------ */
-  /* Screen: backup (export and import)                                  */
+  /* Screen: backup (export and restore)                                 */
   /* ------------------------------------------------------------------ */
 
   async function showBackup() {
@@ -878,14 +882,16 @@
         </section>
 
         <section class="panel">
-          <h3>Import</h3>
-          <p>Add recipes from a backup (<code>.cookbook</code>), a shared recipe
-             (<code>.recipe</code>) or an older <code>.json</code> export. If anything
-             in the file is invalid, nothing is imported.</p>
-          <!-- No "accept" limit: iOS doesn't know .recipe or .cookbook and would
-               grey them out. The file's contents decide whether it's valid. -->
+          <h3>Restore from a backup</h3>
+          <p>Add the recipes and tags from a backup (<code>.cookbook</code>, or an
+             older <code>.json</code> backup). If anything in the file is invalid,
+             nothing is restored.</p>
+          <p class="muted">To add a recipe someone shared with you (<code>.recipe</code>),
+             tap <strong>+ Add</strong> on the recipe list and choose <strong>Add from file</strong>.</p>
+          <!-- No "accept" limit: iOS doesn't know .cookbook and would grey it
+               out. The file's contents decide whether it's valid. -->
           <label class="btn btn-secondary file-btn">
-            Choose file…
+            Choose backup…
             <input type="file" id="import-input" class="visually-hidden">
           </label>
           <div id="import-result" aria-live="polite"></div>
@@ -906,25 +912,112 @@
       input.value = ''; // so choosing the same file again still triggers
       if (!file) return;
       result.innerHTML = '<p class="muted">Checking file…</p>';
-
-      try {
-        const parsed = Transfer.parse(await Transfer.readFile(file));
-        const plan = await Transfer.plan(parsed.recipes, await DB.getAllRecipes(), askConflict);
-        await DB.importRecipes(plan.recipes, parsed.tags);
-        result.innerHTML = '';
-        await showImportComplete(plan);
-      } catch (err) {
-        console.error(err);
-        const message = err.name === 'ImportError' ? err.message
-          : err.name === 'ImportCancelled' ? 'Import cancelled.'
-          : `Something went wrong: ${err.message || err}`;
-        result.innerHTML = `
-          <div class="notice notice-error" role="alert">
-            <p>${esc(message)}</p>
-            <p>Nothing was changed.</p>
-          </div>`;
-      }
+      const outcome = await importFile(file, { backupOnly: true });
+      result.innerHTML = outcome.ok ? '' : `
+        <div class="notice notice-error" role="alert">
+          <p>${esc(outcome.message)}</p>
+          <p>Nothing was changed.</p>
+        </div>`;
     });
+  }
+
+  /**
+   * Check and import one file: conflict questions, one all-or-nothing save,
+   * then "Import complete". Used by "Add from file" (any Cookbook file) and
+   * by the Backup screen (`backupOnly`: backups only). Resolves to
+   * { ok: true } or { ok: false, cancelled, message } — nothing was saved.
+   */
+  async function importFile(file, { backupOnly = false } = {}) {
+    try {
+      const parsed = Transfer.parse(await Transfer.readFile(file));
+      if (backupOnly && parsed.kind !== 'backup') {
+        throw new Transfer.ImportError('This is a shared recipe file, not a backup. To add it, tap + Add on the recipe list and choose Add from file.');
+      }
+      const plan = await Transfer.plan(parsed.recipes, await DB.getAllRecipes(), askConflict);
+      await DB.importRecipes(plan.recipes, parsed.tags);
+      await showImportComplete(plan);
+      return { ok: true };
+    } catch (err) {
+      console.error(err);
+      const cancelled = err.name === 'ImportCancelled';
+      const message = err.name === 'ImportError' ? err.message
+        : cancelled ? 'Import cancelled.'
+        : `Something went wrong: ${err.message || err}`;
+      return { ok: false, cancelled, message };
+    }
+  }
+
+  /**
+   * The + Add choice on the recipe list: type a recipe in, or add one from
+   * a file (.recipe, .cookbook or an older .json export).
+   */
+  function showAddChoice() {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'dialog add-choice';
+    dialog.id = 'add-choice';
+    dialog.setAttribute('aria-labelledby', 'add-choice-title');
+    dialog.innerHTML = `
+      <form method="dialog">
+        <h3 id="add-choice-title">Add a recipe</h3>
+        <button class="btn btn-primary" value="manual">Add manually</button>
+        <!-- A label around the file input opens the file picker straight from
+             the tap, which iOS requires. No "accept" limit: iOS doesn't know
+             .recipe or .cookbook and would grey them out. -->
+        <label class="btn btn-secondary file-btn">
+          Add from file
+          <input type="file" id="add-file-input" class="visually-hidden">
+        </label>
+        <p class="muted dialog-note">A shared recipe (<code>.recipe</code>), a backup
+           (<code>.cookbook</code>) or an older <code>.json</code> export.</p>
+        <button class="btn-link" value="cancel">Cancel</button>
+      </form>`;
+    document.body.append(dialog);
+
+    let file = null;
+    const input = dialog.querySelector('#add-file-input');
+    input.addEventListener('change', () => {
+      file = input.files[0] || null;
+      if (file) dialog.close('file');
+    });
+    dialog.addEventListener('close', () => {
+      const choice = dialog.returnValue;
+      dialog.remove();
+      if (choice === 'manual') go('#/new');
+      else if (choice === 'file' && file) addFromFile(file);
+    });
+    dialog.showModal();
+  }
+
+  /** "Add from file": import, then refresh the list so new recipes show. */
+  async function addFromFile(file) {
+    const outcome = await importFile(file);
+    if (outcome.ok) {
+      if (!location.hash || location.hash === '#/') route();
+      else go('#/');
+    } else if (outcome.cancelled) {
+      toast('Import cancelled. Nothing was changed.');
+    } else {
+      showImportError(outcome.message);
+    }
+  }
+
+  /** A file that couldn't be imported: say why, and that nothing changed. */
+  function showImportError(message) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'dialog';
+    dialog.id = 'import-error';
+    dialog.setAttribute('role', 'alertdialog');
+    dialog.setAttribute('aria-labelledby', 'import-error-title');
+    dialog.innerHTML = `
+      <form method="dialog">
+        <h3 id="import-error-title">Couldn’t add from file</h3>
+        <p>${esc(message)}</p>
+        <p class="muted">Nothing was changed.</p>
+        <button class="btn btn-primary" value="ok">OK</button>
+      </form>`;
+    document.body.append(dialog);
+    dialog.addEventListener('close', () => dialog.remove());
+    dialog.showModal();
   }
 
   /**

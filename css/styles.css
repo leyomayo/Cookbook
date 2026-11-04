@@ -297,8 +297,6 @@ input, textarea, select, button { font: inherit; color: inherit; }
   text-underline-offset: 3px;
 }
 .ing-link:active { opacity: 0.6; }
-/* inline-block stops the link's underline reaching the arrow. */
-.ing-link-icon { display: inline-block; font-size: 22px; line-height: 1; text-decoration: none; }
 
 .step-list { margin: 0; padding: 0; list-style: none; counter-reset: step; }
 .step-list li {
@@ -649,3 +647,9 @@ input[type="search"].tag-search {
 .picker-option:active { background: var(--surface-2); }
 .picker-option[aria-current="true"] { font-weight: 600; }
 .picker-empty { margin: 0; padding: 8px 0; }
+
+/* ---------- + Add choice ---------- */
+
+.add-choice .btn { width: 100%; }
+.dialog-note { font-size: 15px; }
+.btn-link-accent { color: var(--accent); font-weight: 600; }
