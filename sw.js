@@ -15,7 +15,7 @@
  * for the version with a { type: 'get-version' } message.
  */
 
-const CACHE_VERSION = 'v10';
+const CACHE_VERSION = 'v11';
 const CACHE_NAME = `cookbook-${CACHE_VERSION}`;
 
 // Relative paths, so this works under https://<user>.github.io/<repo>/.

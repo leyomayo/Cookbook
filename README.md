@@ -127,17 +127,28 @@ recipe you see just the recipe.
 ### Adding a recipe
 
 On a recipe, tap **Add to grocery list** (between Share and Delete). A
-confirmation lists the ingredients with their amounts. Tap ✕ next to anything
-you already have (**Undo** puts it back), then tap **Add**. A linked homemade
-ingredient, like a pesto, is added as one item; its own recipe's ingredients
-aren't added.
+confirmation lists the ingredients with their amounts, grouped by recipe. Tap
+an item to untick it (tap again to tick it), or ✕ to remove it (**Put back**
+brings removed items back). **Add** adds everything still ticked, from every
+group, in one go.
 
-Under **Related recipes** are recipes that share ingredients with this one,
-most shared first, with the shared ingredients named. They're good to cook in
-the same week. Salt, pepper, oil and water don't count, so they don't make
-everything look related. Tap one to open it; a note at the top takes you back,
-and the confirmation reopens as you left it. Cancel forgets it, and so does
-going back to the recipe list.
+- **Linked homemade recipes** (like a pesto) get their own group automatically,
+  named after that recipe, with "Homemade, used in …". The homemade item itself
+  starts unticked, since you're making it; tick it if you'd rather buy it. A
+  homemade recipe that uses another one brings that in too. Each recipe is
+  included once, so recipes that link to each other in a loop are fine.
+- **Related recipes** share ingredients with the first recipe, most shared
+  first, with the shared ingredients named. Salt, pepper, oil and water don't
+  count. Tap one to add its ingredients as another group; tap it again to take
+  the whole group out. **View** opens it.
+- **Nothing is lost.** While a confirmation is waiting, a note at the top of
+  recipe pages and the recipe list says what you're adding, with **Continue
+  adding**. Going back to the recipe you came from reopens it. Tapping Add to
+  grocery list on another recipe adds that recipe to the same confirmation.
+  Only **Cancel** throws it away. It's kept while the app is open.
+
+On the grocery list, **By recipe** shows a homemade recipe's items under its
+own name; **By food type** merges them with the same food from other recipes.
 
 ### Shopping
 

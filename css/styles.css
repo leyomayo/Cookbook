@@ -833,6 +833,7 @@ body.has-tabbar .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
 /* ---------- Add to grocery list (recipe page) ---------- */
 
 .notice-grocery {
+  margin-bottom: var(--gutter);
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
@@ -848,26 +849,54 @@ body.has-tabbar .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
   border-bottom: 1px solid var(--border);
 }
 .add-list li:last-child { border-bottom: 0; }
-.add-list .amount { min-width: 5em; }
+.add-list .amount { min-width: 4.5em; font-weight: 600; }
 .add-name { flex: 1; min-width: 0; }
-.add-toggle {
+/* inline-block keeps the line-through of an unticked row off this note. */
+.add-homemade { display: inline-block; color: var(--muted); font-size: 14px; text-decoration: none; }
+/* Each item: the row ticks/unticks it, ✕ removes it. */
+.add-tick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--tap);
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.add-tick .tick-box { width: 24px; height: 24px; border-radius: 7px; font-size: 14px; }
+.add-tick[aria-pressed="true"] .tick-box { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.add-list li.is-off .amount,
+.add-list li.is-off .add-name { color: var(--muted); text-decoration: line-through; }
+.add-remove {
   flex: none;
-  min-width: var(--tap);
-  min-height: 36px;
-  padding: 0 10px;
+  width: 36px;
+  height: 36px;
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--surface-2);
   font-size: 15px;
   cursor: pointer;
 }
-.add-list li.is-removed .amount,
-.add-list li.is-removed .add-name { color: var(--muted); text-decoration: line-through; }
-.add-list li.is-removed .add-toggle { color: var(--accent); font-weight: 600; }
+.add-group { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
+.add-group:first-of-type { border-top: 0; padding-top: 0; }
+.add-group-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.add-group-note { font-size: 13px; color: var(--muted); }
+.add-group[data-kind="related"] .add-group-head h4,
+.add-group[data-kind="linked"] .add-group-head h4 { color: var(--accent); }
+.add-putback { justify-self: start; min-height: 32px; padding: 0; color: var(--accent); font-weight: 600; }
 
 .related { display: grid; gap: 8px; padding-top: 4px; border-top: 1px solid var(--border); padding-top: 12px; }
 .related p { font-size: 15px; }
 .related-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.related-item { display: flex; gap: 8px; align-items: stretch; }
+.related-item .related-btn { flex: 1; min-width: 0; }
+.related-view { flex: none; padding: 0 14px; }
+.related-action { font-size: 14px; font-weight: 600; color: var(--accent); }
+.related-btn[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
 .related-btn {
   width: 100%;
   display: grid;
@@ -881,7 +910,8 @@ body.has-tabbar .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
 }
 .related-title { font-weight: 600; color: var(--accent); }
 .related-shared { font-size: 14px; color: var(--muted); }
-.dialog-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dialog-buttons { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; }
+.dialog-buttons .btn { padding: 6px 12px; line-height: 1.25; }
 .btn:disabled { opacity: 0.5; cursor: default; }
 
 /* ---------- Grocery list screen ---------- */

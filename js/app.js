@@ -205,6 +205,7 @@
 
     view.innerHTML = `
       <div id="list-screen">
+        ${draftBanner(new Map(recipes.map((x) => [x.id, x])))}
         <nav class="chips" aria-label="Filter by meal type">${chips}</nav>
         <div class="tag-bar" id="tag-bar"></div>
         <ul class="recipe-grid" id="recipe-grid"></ul>
@@ -278,6 +279,8 @@
           </li>`;
       }).join('');
     }
+
+    screen.querySelector('[data-continue-add]')?.addEventListener('click', () => openGroceryDraft(recipes, {}));
 
     screen.addEventListener('click', (e) => {
       const meal = e.target.closest('[data-filter]');
@@ -400,12 +403,49 @@
   /** The highlighted step per recipe (recipe id → step id), kept the same way. */
   const stepSelected = new Map();
   /**
-   * "Add to grocery list" confirmations you left to look at a related
-   * recipe: recipe id → Set of ingredient ids you removed. Coming back to
-   * that recipe reopens the confirmation as you left it. Cleared by Cancel,
-   * by adding, or by going back to the recipe list.
+   * The "Add to grocery list" confirmation in progress, or null. There's only
+   * ever one: tapping Add to grocery list on another recipe adds that recipe
+   * to it, so starting a new add never throws away one you left open.
+   * Only Cancel (or adding) ends it. Kept in memory while the app is open.
+   *
+   *   explicit  [{ id, kind }] recipes you chose, in order. kind is 'recipe'
+   *             (via its Add to grocery list button) or 'related' (tapped in
+   *             Related recipes; tap again to take it out).
+   *   items     Map "recipeId|ingredientId" → { off: bool, removed: bool }
+   *             for items you unticked, ticked or removed.
+   *   returnTo  recipe id whose page reopens the confirmation (after View).
+   *
+   * Linked homemade recipes aren't stored: draftGroups() adds them after the
+   * recipe that uses them, each recipe once, so links in a loop are safe.
    */
-  const pendingAdds = new Map();
+  let groceryDraft = null;
+
+  /** The confirmation's groups: { recipe, kind, parent } in display order. */
+  function draftGroups(byId) {
+    const seen = new Set();
+    const groups = [];
+    const visit = (id, kind, parent) => {
+      const recipe = byId.get(id);
+      if (!recipe || seen.has(id)) return; // deleted, or already included (loops)
+      seen.add(id);
+      groups.push({ recipe, kind, parent });
+      recipe.ingredients.forEach((i) => { if (i.recipeId) visit(i.recipeId, 'linked', recipe); });
+    };
+    groceryDraft.explicit.forEach((e) => visit(e.id, e.kind, null));
+    return groups;
+  }
+
+  /** Banner shown while a confirmation is waiting (recipe pages and the list). */
+  function draftBanner(byId) {
+    if (!groceryDraft) return '';
+    const titles = groceryDraft.explicit.map((e) => byId.get(e.id)).filter(Boolean).map((x) => `“${x.title || 'Untitled'}”`);
+    if (!titles.length) return '';
+    return `
+      <div class="notice notice-grocery" id="pending-add">
+        <p>You're adding ${esc(titles.join(', '))} to your grocery list.</p>
+        <button type="button" class="btn btn-primary" data-continue-add>Continue adding</button>
+      </div>`;
+  }
 
   async function showDetail(id, trail = []) {
     const all = await DB.getAllRecipes();
@@ -459,11 +499,7 @@
 
     view.innerHTML = `
       <article class="detail">
-        ${trail.length && pendingAdds.has(trail[0]) ? `
-          <div class="notice notice-grocery" id="pending-add">
-            <p>You're adding “${esc(byId.get(trail[0]).title || 'Untitled')}” to your grocery list.</p>
-            <a class="btn btn-primary" href="${esc(back)}">Back to finish</a>
-          </div>` : ''}
+        ${draftBanner(byId)}
         <div class="detail-head">
           <span class="badge badge-${r.mealType}">${esc(Model.mealLabel(r.mealType))}</span>
           <h2 class="detail-title">${esc(r.title || 'Untitled')}</h2>
@@ -600,21 +636,18 @@
     });
     renderStepSelection(); // show checks and the highlight kept from earlier
 
-    // Add to grocery list: confirm the items, with related recipes.
-    const groceryName = (i) => i.name || (i.recipeId && byId.get(i.recipeId)?.title) || '';
-    function openGroceryAdd() {
-      if (!pendingAdds.has(r.id)) pendingAdds.set(r.id, new Set());
-      confirmGroceryAdd({
-        recipe: r,
-        nameOf: groceryName,
-        removed: pendingAdds.get(r.id),
-        related: Foods.related(r, all, groceryName),
-        onRelated: (id) => go(recipeHash(id, [r.id, ...trail])),
-        onDone: () => pendingAdds.delete(r.id),
-      });
+    // Add to grocery list: joins the confirmation in progress, if any.
+    const here = { id: r.id, trail };
+    view.querySelector('#grocery-btn').addEventListener('click', () => {
+      if (!groceryDraft) groceryDraft = { explicit: [], items: new Map(), returnTo: null };
+      if (!draftGroups(byId).some((g) => g.recipe.id === r.id)) groceryDraft.explicit.push({ id: r.id, kind: 'recipe' });
+      openGroceryDraft(all, here);
+    });
+    view.querySelector('[data-continue-add]')?.addEventListener('click', () => openGroceryDraft(all, here));
+    if (groceryDraft && groceryDraft.returnTo === r.id) {
+      groceryDraft.returnTo = null; // came back after View
+      openGroceryDraft(all, here);
     }
-    view.querySelector('#grocery-btn').addEventListener('click', openGroceryAdd);
-    if (pendingAdds.has(r.id)) openGroceryAdd(); // came back from a related recipe
 
     view.querySelector('#share-btn').addEventListener('click', () => {
       Transfer.deliver(Transfer.shareFileName(r), shareData, r.title)
@@ -637,100 +670,174 @@
   }
 
   /**
-   * "Add to grocery list" confirmation. Lists the recipe's ingredients with
-   * amounts; ✕ removes one (tap Undo to bring it back). Related recipes share
-   * ingredients with this one (staples like salt and oil don't count).
-   * Tapping one closes this without losing it: `removed` is the caller's
-   * Set, kept in pendingAdds until you add or cancel. A linked homemade
-   * ingredient is one item; its own recipe's ingredients aren't added.
+   * The "Add to grocery list" confirmation for groceryDraft. One group per
+   * recipe: the recipes you chose, related recipes you tapped, and the
+   * linked homemade recipes they use (each once). Tap an item to untick or
+   * tick it, ✕ to remove it ("Put back" undoes). A linked homemade item
+   * (like a pesto) starts unticked, because its own ingredients are listed
+   * in its group; tick it if you'd rather buy it.
+   *
+   * Related recipes (to the first recipe) can be tapped to add their group,
+   * and tapped again to take it out; View opens one and keeps all of this.
+   * `here` is the screen it's open on ({ id, trail } of a recipe, or {}).
    */
-  async function confirmGroceryAdd({ recipe, nameOf, removed, related, onRelated, onDone }) {
-    const already = (await DB.getGroceryItems()).some((g) => g.recipeId === recipe.id);
-    const items = recipe.ingredients.filter((i) => nameOf(i) || i.amount);
+  async function openGroceryDraft(all, here) {
+    const byId = new Map(all.map((x) => [x.id, x]));
+    const onList = new Set((await DB.getGroceryItems()).map((g) => g.recipeId));
+    const nameOf = (i) => i.name || (i.recipeId && byId.get(i.recipeId)?.title) || '';
+    const key = (recipe, i) => `${recipe.id}|${i.id}`;
 
     const dialog = document.createElement('dialog');
     dialog.className = 'dialog grocery-dialog';
     dialog.id = 'grocery-add';
     dialog.setAttribute('aria-labelledby', 'grocery-add-title');
-    dialog.innerHTML = `
-      <form method="dialog">
-        <h3 id="grocery-add-title">Add to grocery list</h3>
-        <p class="muted">${esc(recipe.title || 'Untitled')}: remove anything you already have.</p>
-        ${already ? '<p class="dialog-note">This recipe is already on your grocery list. Adding it again adds these items again.</p>' : ''}
-        <ul class="add-list">
-          ${items.map((i) => `
-            <li data-ing="${esc(i.id)}">
-              <span class="amount">${esc(i.amount)}</span>
-              <span class="add-name">${esc(nameOf(i))}</span>
-              <button type="button" class="add-toggle" data-toggle="${esc(i.id)}"></button>
-            </li>`).join('')}
-        </ul>
-        <section class="related" aria-labelledby="related-title">
-          <h4 id="related-title">Related recipes</h4>
-          ${related.length ? `
-            <p class="muted">These share ingredients with this one, so they're good to cook the same week.</p>
-            <ul class="related-list">
-              ${related.map(({ recipe: x, shared }) => `
-                <li>
-                  <button type="button" class="related-btn" data-related="${esc(x.id)}">
-                    <span class="related-title">${esc(x.title || 'Untitled')}</span>
-                    <span class="related-shared">${shared.length} shared: ${esc(shared.join(', '))}</span>
-                  </button>
-                </li>`).join('')}
-            </ul>` : '<p class="muted">No other recipes share ingredients with this one.</p>'}
-        </section>
-        <div class="dialog-buttons">
-          <button class="btn btn-secondary" value="cancel">Cancel</button>
-          <button class="btn btn-primary" value="add" id="grocery-add-btn"></button>
-        </div>
-      </form>`;
     document.body.append(dialog);
 
-    const addBtn = dialog.querySelector('#grocery-add-btn');
-    function render() {
-      dialog.querySelectorAll('.add-list li').forEach((li) => {
-        const off = removed.has(li.dataset.ing);
-        li.classList.toggle('is-removed', off);
-        const btn = li.querySelector('.add-toggle');
-        const name = li.querySelector('.add-name').textContent;
-        btn.textContent = off ? 'Undo' : '✕';
-        btn.setAttribute('aria-label', off ? `Put back ${name}` : `Remove ${name}`);
-      });
-      const n = items.filter((i) => !removed.has(i.id)).length;
-      addBtn.textContent = n ? `Add ${n} item${n === 1 ? '' : 's'}` : 'Nothing to add';
-      addBtn.disabled = !n;
+    /** Every item with its current state, grouped. */
+    function current() {
+      const groups = draftGroups(byId);
+      const included = new Set(groups.map((g) => g.recipe.id));
+      return groups.map((g) => ({
+        ...g,
+        items: g.recipe.ingredients.filter((i) => nameOf(i) || i.amount).map((i) => {
+          const saved = groceryDraft.items.get(key(g.recipe, i)) || {};
+          // A homemade item whose recipe is listed below starts unticked.
+          const homemade = Boolean(i.recipeId && included.has(i.recipeId));
+          return { i, key: key(g.recipe, i), homemade, off: saved.off ?? homemade, removed: Boolean(saved.removed) };
+        }),
+      }));
     }
 
-    let leavingFor = null;
+    function setItem(k, change) {
+      groceryDraft.items.set(k, { ...(groceryDraft.items.get(k) || {}), ...change });
+    }
+
+    function render() {
+      const groups = current();
+      if (!groups.length) { groceryDraft = null; dialog.close('cancel'); return; }
+      const first = groups[0].recipe;
+      const kindOf = new Map(groups.map((g) => [g.recipe.id, g.kind]));
+      const related = Foods.related(first, all, nameOf)
+        .filter(({ recipe: x }) => !kindOf.has(x.id) || kindOf.get(x.id) === 'related');
+      const chosen = groups.flatMap((g) => g.items.filter((x) => !x.off && !x.removed).map(() => g.recipe.id));
+      const n = chosen.length;
+      const m = new Set(chosen).size;
+      const scroll = dialog.scrollTop;
+
+      dialog.innerHTML = `
+        <form method="dialog">
+          <h3 id="grocery-add-title">Add to grocery list</h3>
+          <p class="muted">Untick anything you already have, or tap ✕ to remove it.</p>
+          ${groups.map((g) => {
+            const note = [
+              g.kind === 'related' ? 'Related recipe' : '',
+              g.kind === 'linked' ? `Homemade, used in ${g.parent.title || 'Untitled'}` : '',
+              onList.has(g.recipe.id) ? 'Already on your grocery list' : '',
+            ].filter(Boolean).join(' · ');
+            const removed = g.items.filter((x) => x.removed).length;
+            return `
+              <section class="add-group" data-group="${esc(g.recipe.id)}" data-kind="${g.kind}">
+                <div class="add-group-head">
+                  <h4>${esc(g.recipe.title || 'Untitled')}</h4>
+                  ${note ? `<span class="add-group-note">${esc(note)}</span>` : ''}
+                </div>
+                <ul class="add-list">
+                  ${g.items.filter((x) => !x.removed).map((x) => `
+                    <li data-key="${esc(x.key)}" class="${x.off ? 'is-off' : ''}">
+                      <button type="button" class="add-tick" data-tick="${esc(x.key)}" aria-pressed="${!x.off}">
+                        <span class="tick-box" aria-hidden="true">${x.off ? '' : '✓'}</span>
+                        <span class="amount">${esc(x.i.amount)}</span>
+                        <span class="add-name">${esc(nameOf(x.i))}${x.homemade ? ' <span class="add-homemade">(homemade, see below)</span>' : ''}</span>
+                      </button>
+                      <button type="button" class="add-remove" data-remove="${esc(x.key)}" aria-label="Remove ${esc(nameOf(x.i))}">✕</button>
+                    </li>`).join('')}
+                </ul>
+                ${removed ? `<button type="button" class="btn-link add-putback" data-putback="${esc(g.recipe.id)}">Put back ${removed} removed</button>` : ''}
+              </section>`;
+          }).join('')}
+          <section class="related" aria-labelledby="related-title">
+            <h4 id="related-title">Related recipes</h4>
+            ${related.length ? `
+              <p class="muted">These share ingredients with ${esc(first.title || 'this one')}, so they're good to cook the same week. Tap one to add it here.</p>
+              <ul class="related-list">
+                ${related.map(({ recipe: x, shared }) => {
+                  const added = kindOf.get(x.id) === 'related';
+                  return `
+                  <li class="related-item">
+                    <button type="button" class="related-btn" data-related="${esc(x.id)}" aria-pressed="${added}">
+                      <span class="related-title">${esc(x.title || 'Untitled')}</span>
+                      <span class="related-shared">${shared.length} shared: ${esc(shared.join(', '))}</span>
+                      <span class="related-action">${added ? '✓ Added. Tap to take it out' : '+ Add to this list'}</span>
+                    </button>
+                    <button type="button" class="btn btn-secondary related-view" data-view="${esc(x.id)}">View</button>
+                  </li>`;
+                }).join('')}
+              </ul>` : '<p class="muted">No other recipes share ingredients with this one.</p>'}
+          </section>
+          <div class="dialog-buttons">
+            <button class="btn btn-secondary" value="cancel">Cancel</button>
+            <button class="btn btn-primary" value="add" id="grocery-add-btn" ${n ? '' : 'disabled'}>
+              ${n ? `Add ${n} item${n === 1 ? '' : 's'}${m > 1 ? ` from ${m} recipes` : ''}` : 'Nothing to add'}
+            </button>
+          </div>
+        </form>`;
+      dialog.scrollTop = scroll;
+    }
+
+    let viewing = null;
     dialog.addEventListener('click', (e) => {
-      const toggle = e.target.closest('[data-toggle]');
-      const rel = e.target.closest('[data-related]');
-      if (toggle) {
-        const id = toggle.dataset.toggle;
-        if (removed.has(id)) removed.delete(id); else removed.add(id);
-        render();
-      } else if (rel) {
-        leavingFor = rel.dataset.related;
-        dialog.close('related');
+      const t = (attr) => e.target.closest(`[${attr}]`)?.getAttribute(attr);
+      if (t('data-tick')) {
+        const k = t('data-tick');
+        const x = current().flatMap((g) => g.items).find((it) => it.key === k);
+        setItem(k, { off: !x.off });
+      } else if (t('data-remove')) {
+        setItem(t('data-remove'), { removed: true });
+      } else if (t('data-putback')) {
+        const id = t('data-putback');
+        groceryDraft.items.forEach((v, k) => { if (k.startsWith(`${id}|`)) groceryDraft.items.set(k, { ...v, removed: false }); });
+      } else if (t('data-related')) {
+        const id = t('data-related');
+        const at = groceryDraft.explicit.findIndex((x) => x.id === id && x.kind === 'related');
+        if (at >= 0) {
+          groceryDraft.explicit.splice(at, 1);
+          [...groceryDraft.items.keys()].forEach((k) => { if (k.startsWith(`${id}|`)) groceryDraft.items.delete(k); });
+        } else {
+          groceryDraft.explicit.push({ id, kind: 'related' });
+        }
+      } else if (t('data-view')) {
+        viewing = t('data-view');
+        dialog.close('view');
+        return;
+      } else {
+        return;
       }
+      render();
     });
 
     dialog.addEventListener('close', async () => {
       const choice = dialog.returnValue;
+      const groups = groceryDraft ? current() : [];
       dialog.remove();
-      if (choice === 'related' && leavingFor) { onRelated(leavingFor); return; }
-      onDone();
+      if (choice === 'view' && viewing) {
+        groceryDraft.returnTo = here.id || null;
+        go(here.id ? recipeHash(viewing, [here.id, ...(here.trail || [])]) : recipeHash(viewing));
+        return;
+      }
+      groceryDraft = null;
+      document.getElementById('pending-add')?.remove();
       if (choice !== 'add') return;
-      const chosen = items.filter((i) => !removed.has(i.id));
-      await DB.addGroceryItems(chosen.map((i) => ({
-        name: nameOf(i), amount: i.amount, recipeId: recipe.id,
-        recipeTitle: recipe.title || 'Untitled', ingredientId: i.id,
+      const rows = groups.flatMap((g) => g.items.filter((x) => !x.off && !x.removed).map((x) => ({
+        name: nameOf(x.i), amount: x.i.amount, recipeId: g.recipe.id,
+        recipeTitle: g.recipe.title || 'Untitled', ingredientId: x.i.id,
       })));
-      toast(`Added ${chosen.length} item${chosen.length === 1 ? '' : 's'} to your grocery list.`);
+      await DB.addGroceryItems(rows);
+      const m = new Set(rows.map((x) => x.recipeId)).size;
+      toast(`Added ${rows.length} item${rows.length === 1 ? '' : 's'}${m > 1 ? ` from ${m} recipes` : ''} to your grocery list.`);
     });
 
     render();
-    dialog.showModal();
+    if (groceryDraft) dialog.showModal();
   }
 
   /* ------------------------------------------------------------------ */
@@ -1515,7 +1622,8 @@
     const id = rawId ? decodeURIComponent(rawId) : null;
     const trail = new URLSearchParams(query).getAll('from').filter(Boolean).slice(0, MAX_TRAIL);
 
-    if (!page) { stepChecks.clear(); stepSelected.clear(); pendingAdds.clear(); }
+    // A grocery confirmation in progress (groceryDraft) is kept: only Cancel ends it.
+    if (!page) { stepChecks.clear(); stepSelected.clear(); }
 
     // Bottom panel: only on the recipe list and the grocery list.
     const tab = !page ? 'list' : page === 'grocery' ? 'grocery' : null;

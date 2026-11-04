@@ -337,11 +337,11 @@ async function suite(browser, tag, device) {
   await page.screenshot({ path: SP + `/${tag}-v3-list-2.png` });
 
 
-  // ---------- F. Offline with cache v10 ----------
+  // ---------- F. Offline with cache v11 ----------
   await page.goto(URL0); await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload(); await page.waitForSelector('.card');
   const keys = await page.evaluate(() => caches.keys());
-  ok(JSON.stringify(keys) === '["cookbook-v10"]', 'only cache cookbook-v10', keys);
+  ok(JSON.stringify(keys) === '["cookbook-v11"]', 'only cache cookbook-v11', keys);
   await ctx.setOffline(true);
   for (const h of ['#/', '#/tags', '#/backup', '#/new']) {
     await page.goto(URL0 + h); await page.reload();
@@ -1074,54 +1074,111 @@ async function groceryTests(browser, tag, device, errors) {
   ok(!lastCardCovered, T('panel doesn\'t cover the last recipe card'));
 
   // ---- Add to grocery list: button and confirmation ----
+  const dlg = '#grocery-add';
+  const groups = () => page.$$eval('#grocery-add .add-group', l => l.map(g => ({
+    id: g.dataset.group, kind: g.dataset.kind, title: g.querySelector('h4').textContent,
+    note: g.querySelector('.add-group-note')?.textContent || '',
+    items: [...g.querySelectorAll('.add-list li')].map(li => ({
+      text: [li.querySelector('.amount').textContent, li.querySelector('.add-name').textContent].join(' ').replace(/\s+/g, ' ').trim(),
+      on: li.querySelector('.add-tick').getAttribute('aria-pressed') === 'true' })),
+  })));
+  const addLabel = async () => (await page.textContent('#grocery-add-btn')).replace(/\s+/g, ' ').trim();
+  const tick = (key) => page.click(`${dlg} [data-tick="${key}"]`);
+  const related = (id) => page.click(`${dlg} [data-related="${id}"]`);
+
   await open('#/recipe/rPasta');
   const order = await page.$$eval('.detail-actions .btn', l => l.map(b => b.textContent.trim()));
   ok(order.join('|') === 'Share recipe|Add to grocery list|Delete recipe', T('Add to grocery list sits between Share and Delete'), order);
-  await page.click('#grocery-btn'); await page.waitForSelector('#grocery-add[open]');
-  const listed = await texts(page, '#grocery-add .add-list li .amount, #grocery-add .add-list li .add-name');
-  const pairs = []; for (let n = 0; n < listed.length; n += 2) pairs.push(`${listed[n]} ${listed[n + 1]}`.trim());
-  ok(pairs.join('|') === '8 oz spaghetti|1/2 cup butter|4 cloves garlic, minced|1 tsp salt|1/4 cup fresh parsley|1/2 cup grated parmesan cheese|3 tbsp Basil Pesto', T('confirmation lists every ingredient with its amount; the linked pesto is one item'), pairs);
-  const rel = await page.$$eval('#grocery-add .related-btn', l => l.map(b => b.textContent.replace(/\s+/g, ' ').trim()));
-  ok(rel.length === 3 && rel[0] === 'Garlic Bread 3 shared: butter, garlic, parsley' && rel[1] === 'Basil Pesto 2 shared: garlic, parmesan' && rel[2] === 'Butter Cookies 1 shared: butter',
-     T('related recipes: most shared first, shared ingredients named, staples (salt, oil, water, pepper) ignored'), rel);
-  ok(!rel.some(r => r.includes('Tomato Soup')), T('a recipe sharing only staples isn\'t related'));
-  const addLabel = () => page.textContent('#grocery-add-btn');
-  await page.click('#grocery-add [data-toggle=a4]'); await page.click('#grocery-add [data-toggle=a5]');
-  ok(await addLabel() === 'Add 5 items' && await page.$eval('#grocery-add li[data-ing=a4]', li => li.classList.contains('is-removed')), T('removing items updates the count'), await addLabel());
-  await page.click('#grocery-add [data-toggle=a5]');
-  ok(await addLabel() === 'Add 6 items', T('Undo puts an item back'));
+  await page.click('#grocery-btn'); await page.waitForSelector(`${dlg}[open]`);
+  let g = await groups();
+  ok(g.map(x => `${x.title}/${x.kind}`).join('|') === 'Garlic Butter Pasta/recipe|Basil Pesto/linked', T('linked homemade recipe gets its own group automatically'), g.map(x => x.title));
+  ok(g[0].items.map(x => x.text).join('|') === '8 oz spaghetti|1/2 cup butter|4 cloves garlic, minced|1 tsp salt|1/4 cup fresh parsley|1/2 cup grated parmesan cheese|3 tbsp Basil Pesto (homemade, see below)',
+     T('recipe group lists every ingredient with its amount'), g[0].items.map(x => x.text));
+  ok(g[0].items.slice(0, 6).every(x => x.on) && !g[0].items[6].on, T('items start ticked; the homemade pesto item starts unticked'), g[0].items);
+  ok(g[1].note === 'Homemade, used in Garlic Butter Pasta' && g[1].items.map(x => x.text).join('|') === '2 cups fresh basil|1/3 cup pine nuts|1 garlic clove|1/2 cup olive oil|1/2 cup parmesan cheese' && g[1].items.every(x => x.on),
+     T('sub-recipe group lists its ingredients, ticked'), g[1]);
+  ok(await addLabel() === 'Add 11 items from 2 recipes', T('count covers every group'), await addLabel());
+  const rel = await page.$$eval('#grocery-add .related-btn', l => l.map(b => [b.querySelector('.related-title').textContent, b.querySelector('.related-shared').textContent].join(' ')));
+  ok(rel.join('|') === 'Garlic Bread 3 shared: butter, garlic, parsley|Butter Cookies 1 shared: butter',
+     T('related recipes: most shared first, staples ignored, recipes already in the list (the pesto) left out'), rel);
+  ok((await page.$$('#grocery-add .related-view')).length === 2, T('each related recipe has a View button'));
+
+  // Untick and remove, in both groups.
+  await page.click(`${dlg} [data-remove="rPasta|a4"]`); // salt: remove
+  await tick('rPasta|a5'); await tick('rPasta|a5');      // parsley: untick, tick again
+  await tick('rPasta|a7');                               // pesto: buy it instead
+  for (const k of ['p1', 'p2', 'p3', 'p4', 'p5']) await tick(`rPesto|${k}`);
+  g = await groups();
+  ok(!g[0].items.some(x => /salt/.test(x.text)) && await page.$(`${dlg} [data-putback=rPasta]`) && g[1].items.every(x => !x.on) && g[0].items.find(x => /Basil Pesto/.test(x.text)).on,
+     T('remove hides an item (with Put back); unticking works in every group'), g);
+  ok(await addLabel() === 'Add 6 items', T('count follows ticks and removals'), await addLabel());
   await page.screenshot({ path: SP + `/${tag}-grocery-confirm.png` });
 
-  // Open a related recipe: the pending add survives the trip.
-  await page.click('#grocery-add [data-related=rBread]');
-  await page.waitForSelector('.detail-title:has-text("Garlic Bread")');
-  ok(/#\/recipe\/rBread\?from=rPasta/.test(page.url()) && (await page.$$('#grocery-add')).length === 0, T('tapping a related recipe opens it'), page.url());
-  ok(/You're adding “Garlic Butter Pasta” to your grocery list/.test(await page.textContent('#pending-add')), T('related recipe shows the add is still waiting'));
-  await page.screenshot({ path: SP + `/${tag}-grocery-related.png` });
-  await page.click('#pending-add a'); await page.waitForSelector('#grocery-add[open]');
-  ok(await addLabel() === 'Add 6 items' && await page.$eval('#grocery-add li[data-ing=a4]', li => li.classList.contains('is-removed')), T('coming back reopens the confirmation as it was left'));
-  await page.click('#grocery-add-btn'); await page.waitForSelector('#grocery-add', { state: 'detached' });
-  await page.waitForSelector('.toast');
-  ok(await page.textContent('.toast') === 'Added 6 items to your grocery list.', T('confirming adds the items'));
-  let rows = await groceryRows();
-  ok(rows.length === 6 && !rows.some(r => r.name === 'salt') && rows.every(r => r.recipeId === 'rPasta' && r.recipeTitle === 'Garlic Butter Pasta' && r.checked === false),
-     T('removed item isn\'t added; items remember their recipe'), rows.map(r => r.name));
-  ok(rows.some(r => r.name === 'Basil Pesto' && r.amount === '3 tbsp') && !rows.some(r => /basil$|pine/.test(r.name)), T('linked pesto is one item; its recipe\'s ingredients aren\'t pulled in'), rows.map(r => r.name));
-  // Cancel doesn't add anything and forgets the pending add.
-  await page.click('#grocery-btn'); await page.waitForSelector('#grocery-add[open]');
-  ok(/already on your grocery list/.test(await page.textContent('#grocery-add')), T('adding a recipe again says it\'s already on the list'));
-  await page.click('#grocery-add button[value=cancel]'); await page.waitForSelector('#grocery-add', { state: 'detached' });
-  ok((await groceryRows()).length === 6, T('Cancel adds nothing'));
-  await open('#/recipe/rPasta'); await page.waitForTimeout(200);
-  ok((await page.$$('#grocery-add')).length === 0, T('after Cancel the confirmation doesn\'t reopen'));
+  // Related recipes join the same confirmation as their own groups.
+  await related('rBread');
+  g = await groups();
+  ok(g.map(x => `${x.title}/${x.kind}`).join('|') === 'Garlic Butter Pasta/recipe|Basil Pesto/linked|Garlic Bread/related' && g[2].items.length === 5 && g[2].items.every(x => x.on),
+     T('tapping a related recipe adds its ingredients as a group'), g.map(x => x.title));
+  ok(await page.getAttribute(`${dlg} [data-related=rBread]`, 'aria-pressed') === 'true' && /Tap to take it out/.test(await page.textContent(`${dlg} [data-related=rBread]`)), T('related recipe shows it was added'));
+  await tick('rBread|b1');
+  await related('rBread');
+  g = await groups();
+  ok(g.map(x => x.title).join('|') === 'Garlic Butter Pasta|Basil Pesto', T('tapping it again removes the whole group'), g.map(x => x.title));
+  await related('rBread');
+  g = await groups();
+  ok(g[2].items.every(x => x.on), T('adding it again starts fresh (all ticked)'), g[2].items);
+  await related('rCookies');
+  ok(await addLabel() === 'Add 16 items from 3 recipes', T('three groups counted together'), await addLabel());
 
-  // Add two more recipes in full.
-  for (const id of ['rBread', 'rCookies']) {
-    await open('#/recipe/' + id);
-    await page.click('#grocery-btn'); await page.waitForSelector('#grocery-add[open]');
-    await page.click('#grocery-add-btn'); await page.waitForSelector('#grocery-add', { state: 'detached' });
-  }
-  ok((await groceryRows()).length === 16, T('16 items after adding three recipes'));
+  // View keeps everything; back reopens it as it was.
+  await page.click(`${dlg} [data-view=rCookies]`);
+  await page.waitForSelector('.detail-title:has-text("Butter Cookies")');
+  ok(/#\/recipe\/rCookies\?from=rPasta/.test(page.url()) && (await page.$$(dlg)).length === 0, T('View opens the related recipe'), page.url());
+  ok(/You're adding “Garlic Butter Pasta”, “Garlic Bread”, “Butter Cookies” to your grocery list/.test(await page.textContent('#pending-add')), T('banner says what you\'re adding'), await page.textContent('#pending-add'));
+  await page.screenshot({ path: SP + `/${tag}-grocery-related.png` });
+  await page.click('#pending-add [data-continue-add]'); await page.waitForSelector(`${dlg}[open]`);
+  ok(await addLabel() === 'Add 16 items from 3 recipes', T('the banner reopens the confirmation, nothing lost'), await addLabel());
+  await page.click(`${dlg} [data-view=rBread]`); await page.waitForSelector('.detail-title:has-text("Garlic Bread")');
+  // Starting a new add on another recipe joins the one in progress.
+  await page.click('#grocery-btn'); await page.waitForSelector(`${dlg}[open]`);
+  g = await groups();
+  ok(g.map(x => x.title).join('|') === 'Garlic Butter Pasta|Basil Pesto|Garlic Bread|Butter Cookies' && await addLabel() === 'Add 16 items from 3 recipes',
+     T('Add to grocery list on another recipe never discards the one in progress'), { g: g.map(x => x.title), label: await addLabel() });
+  await page.click(`${dlg} [data-view=rCookies]`); await page.waitForSelector('.detail-title:has-text("Butter Cookies")');
+  await page.click('#header-left a'); await page.waitForSelector('.detail-title:has-text("Garlic Bread")');
+  await page.waitForSelector(`${dlg}[open]`);
+  ok(await addLabel() === 'Add 16 items from 3 recipes', T('Back reopens the confirmation where you left it'));
+  await page.keyboard.press('Escape'); await page.waitForSelector(dlg, { state: 'detached' });
+  ok(!(await page.$('#pending-add')), T('Escape (like Cancel) ends it'));
+  await page.click('#grocery-btn'); await page.waitForSelector(`${dlg}[open]`);
+  ok((await groups()).map(x => x.title).join('|') === 'Garlic Bread', T('after Cancel a new add starts fresh'));
+  await page.click(`${dlg} button[value=cancel]`); await page.waitForSelector(dlg, { state: 'detached' });
+  ok((await groceryRows()).length === 0, T('Cancel adds nothing'));
+
+  // Build it again and confirm several groups in one go.
+  await open('#/recipe/rPasta');
+  await page.click('#grocery-btn'); await page.waitForSelector(`${dlg}[open]`);
+  await page.click(`${dlg} [data-remove="rPasta|a4"]`); await tick('rPasta|a7');
+  for (const k of ['p1', 'p2', 'p3', 'p4', 'p5']) await tick(`rPesto|${k}`);
+  await related('rBread'); await related('rCookies');
+  // The confirmation survives a trip to the recipe list too.
+  await page.click(`${dlg} [data-view=rBread]`); await page.waitForSelector('.detail-title:has-text("Garlic Bread")');
+  await page.click('#header-left a'); await page.waitForSelector('.detail-title:has-text("Garlic Butter Pasta")');
+  await page.waitForSelector(`${dlg}[open]`); await page.click(`${dlg} [data-view=rBread]`);
+  await page.waitForSelector('.detail-title:has-text("Garlic Bread")');
+  await page.evaluate(() => { location.hash = '#/'; }); await page.waitForSelector('#recipe-grid');
+  ok(!!(await page.$('#list-screen #pending-add')), T('the recipe list shows the banner too'));
+  await page.click('#pending-add [data-continue-add]'); await page.waitForSelector(`${dlg}[open]`);
+  ok(await addLabel() === 'Add 16 items from 3 recipes', T('still all there after going to the recipe list'), await addLabel());
+  await page.click('#grocery-add-btn'); await page.waitForSelector(dlg, { state: 'detached' });
+  await page.waitForSelector('.toast');
+  ok(await page.textContent('.toast') === 'Added 16 items from 3 recipes to your grocery list.', T('confirming adds every group at once'), await page.textContent('.toast'));
+  ok(!(await page.$('#pending-add')), T('banner goes away after adding'));
+  let rows = await groceryRows();
+  const by = (id) => rows.filter(r => r.recipeId === id).map(r => r.name);
+  ok(rows.length === 16 && by('rPasta').length === 6 && by('rBread').length === 5 && by('rCookies').length === 5 && by('rPesto').length === 0,
+     T('items saved with their own recipe; unticked and removed ones left out'), { pasta: by('rPasta'), bread: by('rBread'), cookies: by('rCookies') });
+  ok(!by('rPasta').includes('salt') && by('rPasta').includes('Basil Pesto') && rows.every(r => r.checked === false), T('pasta without salt, with the pesto bought ready-made'));
 
   // ---- Grocery List: by food type ----
   await open('#/grocery');
@@ -1184,6 +1241,45 @@ async function groceryTests(browser, tag, device, errors) {
   await page.click('#header-right button'); await page.waitForSelector('.grocery-empty');
   ok((await groceryRows()).length === 0 && /Your grocery list is empty/.test(await page.textContent('#grocery-screen')), T('Clear empties the list'));
   ok(!(await page.$('#header-right button')), T('no Clear button on an empty list'));
+
+  // ---- Linked sub-recipe on the grocery list ----
+  await open('#/recipe/rPasta');
+  await page.click('#grocery-btn'); await page.waitForSelector(`${dlg}[open]`);
+  await page.click('#grocery-add-btn'); await page.waitForSelector(dlg, { state: 'detached' });
+  rows = await groceryRows();
+  ok(rows.filter(r => r.recipeId === 'rPasta').length === 6 && rows.filter(r => r.recipeId === 'rPesto').length === 5 && !rows.some(r => r.name === 'Basil Pesto'),
+     T('by default: the recipe plus its homemade recipe\'s ingredients, not the homemade item itself'), rows.map(r => r.name));
+  await page.goto(URL0 + '#/grocery'); await page.waitForSelector('#grocery');
+  await page.click('[data-group=recipe]');
+  v = await view();
+  ok(v.map(x => x.title).join('|') === 'Garlic Butter Pasta|Basil Pesto' && v[1].lines.join('|') === 'fresh basil: 2 cups|pine nuts: 1/3 cup|garlic clove: 1|olive oil: 1/2 cup|parmesan cheese: 1/2 cup',
+     T('by recipe: the homemade recipe\'s items are under its own name'), v);
+  await page.click('[data-group=type]');
+  v = await view();
+  const lines = v.flatMap(x => x.lines);
+  ok(lines.includes('garlic: 4 cloves, 1') && lines.includes('parmesan: 1/2 cup, 1/2 cup'), T('food type view merges them with the same food from the main recipe'), lines);
+  page.__confirm = true; await page.click('#header-right button'); await page.waitForSelector('.grocery-empty'); page.__confirm = false;
+
+  // ---- Links in a loop: each recipe once ----
+  await page.evaluate(async () => {
+    const ing = (id, amount, name, recipeId = null) => ({ id, amount, name, recipeId });
+    const base = { ...Model.newRecipe(), mealType: 'other' };
+    await DB.saveRecipe({ ...base, id: 'rLoopA', title: 'Loop Sauce', ingredients: [ing('la1', '1 cup', 'cream'), ing('la2', '2 tbsp', '', 'rLoopB')] });
+    await DB.saveRecipe({ ...base, id: 'rLoopB', title: 'Loop Stock', ingredients: [ing('lb1', '1', 'onion'), ing('lb2', '1 cup', '', 'rLoopA'), ing('lb3', '1 tbsp', 'self', 'rLoopB')] });
+  });
+  await open('#/recipe/rLoopA');
+  await page.click('#grocery-btn'); await page.waitForSelector(`${dlg}[open]`, { timeout: 5000 });
+  g = await groups();
+  ok(g.map(x => `${x.title}/${x.kind}`).join('|') === 'Loop Sauce/recipe|Loop Stock/linked', T('links in a loop (and a self-link): each recipe appears once'), g.map(x => x.title));
+  ok(g[0].items.map(x => `${x.text}/${x.on}`).join('|') === '1 cup cream/true|2 tbsp Loop Stock (homemade, see below)/false' &&
+     g[1].items.map(x => `${x.text}/${x.on}`).join('|') === '1 onion/true|1 cup Loop Sauce (homemade, see below)/false|1 tbsp self (homemade, see below)/false',
+     T('homemade items in the loop start unticked'), g);
+  await page.click('#grocery-add-btn'); await page.waitForSelector(dlg, { state: 'detached' });
+  rows = await groceryRows();
+  ok(rows.map(r => `${r.recipeTitle}:${r.name}`).join('|') === 'Loop Sauce:cream|Loop Stock:onion', T('loop: each ingredient added once'), rows.map(r => r.name));
+  page.__confirm = true;
+  await page.goto(URL0 + '#/grocery'); await page.waitForSelector('#grocery');
+  await page.click('#header-right button'); await page.waitForSelector('.grocery-empty'); page.__confirm = false;
   page.__confirm = false;
 
   // ---- Remembered step ----
