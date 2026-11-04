@@ -9,8 +9,8 @@ IndexedDB storage. No servers, no accounts, no cloud services.
 
 ## What's in this version
 
-- **Recipe list** with a meal type filter (All, Breakfast, Lunch, Snack, Dinner, Other)
-  and a tag filter. Pick one or more tags; recipes must have all of them to show.
+- **Recipe list** with a meal type filter (All, Breakfast, Lunch, Snack, Dinner, Other).
+  Tap **Tags** under it to filter by tag as well.
 - **Add / edit form**: title, meal type, prep time, cook time, servings, tags,
   an ingredient list, and numbered directions you can reorder
 - **Recipe detail** page. On iPad the ingredients and directions sit side by side.
@@ -26,21 +26,35 @@ IndexedDB storage. No servers, no accounts, no cloud services.
 - Press **Return** to add the tag that matches your text exactly (ignoring
   case). If there's no exact match, a new tag is created and saved to the list.
   Only the first letter is capitalized; the rest stays as you typed it.
-- Tags stay in the list even when no recipe uses them. The tag filter on the
-  recipe list only shows tags that at least one recipe uses.
+- Tags stay in the list even when no recipe uses them.
+
+### Filtering by tag
+
+- On the recipe list, tap **Tags** (under the meal types) to open the tag filter.
+- Search for a tag: your text can appear anywhere in its name, in any case.
+  Only tags used by at least one recipe are listed, with how many recipes use each.
+- Tap tags to choose them. Pick several and a recipe must have all of them.
+  The tag filter works together with the meal type filter. **Show N recipes**
+  takes you back to the list.
+- While a tag filter is on, the list shows a highlighted bar with the chosen
+  tags. Tap a tag's ✕ to remove it, or **Clear** to remove them all.
 
 ## Backup, sharing and import
 
 Open **Backup** (top left of the recipe list).
 
-- **Export all recipes** makes one backup file with every recipe and your tag list.
-- **Share recipe** (at the bottom of a recipe) makes a file with that recipe
-  and every recipe it links to, including recipes those link to.
+- **Export all recipes** makes one backup file, `cookbook-backup-<date>.cookbook`,
+  with every recipe and your tag list.
+- **Share recipe** (at the bottom of a recipe) makes `<recipe-name>.recipe`
+  with that recipe and every recipe it links to, including recipes those link to.
 - On iPhone and iPad both open the **share sheet**. Choose **Save to Files**
   to keep a backup, or AirDrop, Messages or Mail to send it. On a computer the
-  file downloads.
-- **Choose file…** imports a backup or a shared recipe. To import a file
-  someone sent you, save it to Files first, then pick it here.
+  file downloads. If the share sheet won't take the file, the app downloads it
+  instead and tells you.
+- **Choose file…** imports a `.cookbook` backup, a `.recipe` file, or an older
+  `.json` export. To import a file someone sent you, save it to Files first,
+  then pick it here. The picker doesn't limit file types (otherwise iOS greys
+  out `.recipe` and `.cookbook` files); the app checks the file's contents.
 
 When importing:
 
@@ -53,6 +67,9 @@ When importing:
   renamed with "-new" on the end, and a warning tells you.
 - Links between imported recipes are updated when a recipe gets a new id.
 - Imported tags join your tag list.
+- When it's done, an **Import complete** message shows how many recipes were
+  added, overwritten, ignored, and renamed with "-new". Tap **OK** to close it.
+  It doesn't appear if you cancel or the file is invalid.
 
 **Make a backup now and then.** Recipes live only on the device, so a backup
 in Files (or iCloud Drive) is the only copy if the app is deleted.
@@ -95,7 +112,8 @@ When you change any file:
 1. Bump `CACHE_VERSION` in `sw.js` (for example `'v1'` → `'v2'`).
 2. Commit and push.
 3. Open the app once online. It downloads the new version in the background
-   and uses it the next time you open the app.
+   and uses it the next time you open the app. If you don't see the change,
+   close the app fully and open it again (it can take two or three launches).
 
 Recipes aren't affected by updates, because they live in IndexedDB, not in the cache.
 When the data shape changes, the update converts existing recipes the first
@@ -112,6 +130,13 @@ python3 -m http.server 8000
 Then open <http://localhost:8000>. The service worker only runs over HTTPS or
 on `localhost`.
 
+### Automated tests
+
+`tests/app.test.js` drives the app in Chromium (emulating iPhone 13 and iPad
+Pro) with [Playwright](https://playwright.dev). It isn't part of the app.
+Serve the repository on port 8765 (`python3 -m http.server 8765`), then run
+`node tests/app.test.js`. See the top of that file for setup.
+
 ## Project layout
 
 ```
@@ -121,10 +146,11 @@ sw.js                  Service worker: offline caching of the app files
 css/styles.css         All styles. Mobile first, with a wider layout for iPad.
 js/model.js            Recipe data shape, defaults, schema upgrades (normalizeRecipe)
 js/tags.js             Starter tags, tag list helpers, the tag editor
-js/transfer.js         Export/share/import: file format, checks, conflict handling
+js/transfer.js         Export/share/import: file names and format, checks, conflict handling
 js/db.js               IndexedDB storage: recipes and the tag list
-js/app.js              Screens and hash-based navigation (#/, #/recipe/<id>, #/new, #/edit/<id>, #/backup)
+js/app.js              Screens and hash-based navigation (#/, #/tags, #/recipe/<id>, #/new, #/edit/<id>, #/backup)
 icons/                 Home Screen and manifest icons
+tests/app.test.js      Browser tests (not loaded by the app)
 ```
 
 ## Data model
@@ -154,7 +180,8 @@ The tag list is a separate IndexedDB store (`tags`), keyed by the lower-case nam
 
 ### File format
 
-Export files are JSON:
+Export files are JSON, whatever the file ending (`.cookbook` for backups,
+`.recipe` for shared recipes, `.json` for exports from older versions):
 
 ```json
 {

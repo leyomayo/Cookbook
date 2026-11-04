@@ -5,6 +5,7 @@
  * server config, and the Home Screen app reopens on the last screen:
  *
  *   #/               recipe list (with meal type filter)
+ *   #/tags           pick tags to filter the recipe list
  *   #/recipe/<id>    recipe detail
  *   #/new            add recipe form
  *   #/edit/<id>      edit recipe form
@@ -74,13 +75,60 @@
   }
 
   /** A short message that fades away, e.g. "Backup saved". */
-  function toast(message) {
+  function toast(message, ms = 3000) {
     const el = document.createElement('div');
     el.className = 'toast';
     el.setAttribute('role', 'status');
     el.textContent = message;
     document.body.append(el);
-    setTimeout(() => el.remove(), 3000);
+    setTimeout(() => el.remove(), ms);
+  }
+
+  /**
+   * Tell the user how a file left the app (see Transfer.deliver). `what` is
+   * "Recipe file" or "Backup".
+   */
+  function reportDelivery(result, what) {
+    if (result === 'refused') {
+      toast(`The share sheet wouldn't take this file, so ${what.toLowerCase()} was downloaded instead. Check your Downloads folder in Files.`, 8000);
+    } else if (result === 'downloaded') {
+      toast(`${what} downloaded.`);
+    }
+  }
+
+  /* ---------- Filters shared by the list and the Tags screen ---------- */
+
+  /**
+   * The tag filter is a list of lower-case tag keys saved in prefs, so the
+   * list and the Tags screen see the same choice. Keys for tags no recipe
+   * uses any more are dropped. A recipe must have every chosen tag.
+   */
+  function getTagFilter(counts) {
+    let keys;
+    try { keys = JSON.parse(prefs.get('tagFilter', '[]')); } catch { keys = []; }
+    return (Array.isArray(keys) ? keys : []).filter((k) => typeof k === 'string' && counts.has(k));
+  }
+
+  function setTagFilter(keys) {
+    prefs.set('tagFilter', JSON.stringify(keys));
+  }
+
+  function getMealFilter() {
+    const value = prefs.get('mealFilter', 'all');
+    return value === 'all' || Model.MEAL_TYPES.some((m) => m.value === value) ? value : 'all';
+  }
+
+  /** Recipes that pass both the meal type filter and the tag filter. */
+  function applyFilters(recipes, meal, tagKeys) {
+    return recipes
+      .filter((r) => meal === 'all' || r.mealType === meal)
+      .filter((r) => tagKeys.every((k) => r.tags.some((t) => t.toLowerCase() === k)));
+  }
+
+  /** Every tag used by at least one recipe, most used first, then A to Z. */
+  function usedTags(recipes, counts) {
+    const byKey = new Map(recipes.flatMap((r) => r.tags).map((t) => [t.toLowerCase(), t]));
+    return Tags.sortByUsage([...byKey.values()], counts);
   }
 
   function tagBubbles(tags) {
@@ -109,16 +157,13 @@
     const recipes = await DB.getAllRecipes();
     recipes.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
 
-    let filter = prefs.get('mealFilter', 'all');
+    let filter = getMealFilter();
 
-    // Tag filter: only tags used by at least one recipe, most used first.
-    // You can pick several; a recipe must have all of them to show.
+    // The tag filter is chosen on the Tags screen (#/tags); here we only
+    // show which tags are active and let you remove them.
     const counts = Tags.usageCounts(recipes);
-    const usedTags = Tags.sortByUsage(
-      [...new Map(recipes.flatMap((r) => r.tags).map((t) => [t.toLowerCase(), t])).values()], counts);
-    let tagFilter;
-    try { tagFilter = JSON.parse(prefs.get('tagFilter', '[]')); } catch { tagFilter = []; }
-    tagFilter = (Array.isArray(tagFilter) ? tagFilter : []).filter((k) => counts.has(k));
+    const nameOf = new Map(usedTags(recipes, counts).map((t) => [t.toLowerCase(), t]));
+    let tagFilter = getTagFilter(counts);
 
     // Filter chips: "All" plus one per meal type, each with a count.
     const chips = [{ value: 'all', label: 'All' }, ...Model.MEAL_TYPES]
@@ -130,32 +175,48 @@
       })
       .join('');
 
-    const tagChips = usedTags.map((t) =>
-      `<button type="button" class="chip chip-tag" data-tag="${esc(t.toLowerCase())}">${esc(t)}</button>`).join('');
-
     view.innerHTML = `
       <div id="list-screen">
         <nav class="chips" aria-label="Filter by meal type">${chips}</nav>
-        ${usedTags.length ? `<nav class="chips chips-tags" aria-label="Filter by tag">${tagChips}</nav>` : ''}
+        <div class="tag-bar" id="tag-bar"></div>
         <ul class="recipe-grid" id="recipe-grid"></ul>
       </div>
     `;
 
     const screen = view.querySelector('#list-screen');
+    const tagBar = view.querySelector('#tag-bar');
     const grid = view.querySelector('#recipe-grid');
 
+    /**
+     * The row under the meal types: a Tags button (opens #/tags) and, when
+     * tags are chosen, each one as a removable pill plus Clear.
+     */
+    function renderTagBar() {
+      const active = tagFilter.length;
+      tagBar.classList.toggle('tag-bar-active', active > 0);
+      tagBar.innerHTML = `
+        <a class="tag-bar-btn" href="#/tags" ${nameOf.size ? '' : 'aria-disabled="true"'}>
+          <span aria-hidden="true">🏷</span> Tags${active ? ` <span class="tag-bar-count">${active}</span>` : ''}
+        </a>
+        ${active ? `
+          <span class="tag-bar-label">Showing recipes tagged</span>
+          ${tagFilter.map((k) => `
+            <button type="button" class="bubble bubble-on" data-untag="${esc(k)}"
+                    aria-label="Stop filtering by ${esc(nameOf.get(k))}">
+              ${esc(nameOf.get(k))} <span aria-hidden="true">✕</span>
+            </button>`).join('')}
+          <button type="button" class="btn-link tag-bar-clear" data-clear-tags>Clear</button>` : ''}
+      `;
+    }
+
     function renderCards() {
-      // Highlight the active chips.
+      // Highlight the active meal type chip.
       view.querySelectorAll('[data-filter]').forEach((chip) => {
         chip.setAttribute('aria-pressed', String(chip.dataset.filter === filter));
       });
-      view.querySelectorAll('[data-tag]').forEach((chip) => {
-        chip.setAttribute('aria-pressed', String(tagFilter.includes(chip.dataset.tag)));
-      });
+      renderTagBar();
 
-      const shown = recipes
-        .filter((r) => filter === 'all' || r.mealType === filter)
-        .filter((r) => tagFilter.every((k) => r.tags.some((t) => t.toLowerCase() === k)));
+      const shown = applyFilters(recipes, filter, tagFilter);
 
       if (!shown.length) {
         let message = '<p>Your cookbook is empty.</p>';
@@ -192,23 +253,107 @@
 
     screen.addEventListener('click', (e) => {
       const meal = e.target.closest('[data-filter]');
-      const tag = e.target.closest('[data-tag]');
+      const untag = e.target.closest('[data-untag]');
       if (meal) {
         filter = meal.dataset.filter;
-      } else if (tag) {
-        const key = tag.dataset.tag;
-        tagFilter = tagFilter.includes(key) ? tagFilter.filter((k) => k !== key) : [...tagFilter, key];
+      } else if (untag) {
+        tagFilter = tagFilter.filter((k) => k !== untag.dataset.untag);
       } else if (e.target.closest('[data-clear-tags]')) {
         tagFilter = [];
       } else {
         return;
       }
       prefs.set('mealFilter', filter);
-      prefs.set('tagFilter', JSON.stringify(tagFilter));
+      setTagFilter(tagFilter);
       renderCards();
     });
 
     renderCards();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Screen: tag filter                                                  */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Pick tags to filter the recipe list. Only tags used by at least one
+   * recipe are listed; unused tags stay in the tag list but aren't shown
+   * here. Choices are saved as you tap, so Back keeps them too.
+   */
+  async function showTags() {
+    setHeader({ title: 'Filter by Tag', back: '#/' });
+
+    const recipes = await DB.getAllRecipes();
+    const counts = Tags.usageCounts(recipes);
+    const tags = usedTags(recipes, counts);
+    const meal = getMealFilter();
+    let selected = getTagFilter(counts);
+
+    view.innerHTML = `
+      <div class="tag-screen" id="tag-screen">
+        <input type="search" id="tag-search" class="tag-search" placeholder="Search tags"
+               aria-label="Search tags" autocomplete="off" autocapitalize="none" enterkeyhint="search">
+        <div class="tag-status" id="tag-status" aria-live="polite"></div>
+        <div class="tag-options" id="tag-options"></div>
+        <div class="tag-screen-actions">
+          <a class="btn btn-primary" href="#/" id="show-btn"></a>
+        </div>
+      </div>
+    `;
+
+    const search = view.querySelector('#tag-search');
+    const status = view.querySelector('#tag-status');
+    const options = view.querySelector('#tag-options');
+    const showBtn = view.querySelector('#show-btn');
+
+    function render() {
+      const query = search.value.trim().toLowerCase();
+      // Matches the text anywhere in the tag name, ignoring case.
+      const matches = query ? tags.filter((t) => t.toLowerCase().includes(query)) : tags;
+
+      if (!tags.length) {
+        options.innerHTML = '<p class="muted">No recipes have tags yet. Add tags in the recipe form.</p>';
+      } else if (!matches.length) {
+        options.innerHTML = '<p class="muted">No tags match your search.</p>';
+      } else {
+        options.innerHTML = matches.map((t) => {
+          const key = t.toLowerCase();
+          return `
+            <button type="button" class="chip chip-tag" data-tag="${esc(key)}"
+                    aria-pressed="${selected.includes(key)}">
+              ${esc(t)} <span class="chip-count">${counts.get(key)}</span>
+            </button>`;
+        }).join('');
+      }
+
+      const n = applyFilters(recipes, meal, selected).length;
+      status.innerHTML = `
+        ${selected.length
+          ? `<p><strong>${selected.length} tag${selected.length === 1 ? '' : 's'} chosen.</strong>
+               Recipes must have all of them.
+               <button type="button" class="btn-link" data-clear-tags>Clear</button></p>`
+          : '<p class="muted">Tap tags to choose them. Pick several to narrow the list.</p>'}
+        ${meal !== 'all' ? `<p class="muted">Also filtered by meal type: ${esc(Model.mealLabel(meal))}.</p>` : ''}
+      `;
+      showBtn.textContent = `Show ${n} recipe${n === 1 ? '' : 's'}`;
+    }
+
+    search.addEventListener('input', render);
+    view.querySelector('#tag-screen').addEventListener('click', (e) => {
+      const tag = e.target.closest('[data-tag]');
+      if (tag) {
+        const key = tag.dataset.tag;
+        selected = selected.includes(key) ? selected.filter((k) => k !== key) : [...selected, key];
+      } else if (e.target.closest('[data-clear-tags]')) {
+        selected = [];
+      } else {
+        return;
+      }
+      setTagFilter(selected);
+      render();
+    });
+
+    render();
   }
 
   /* ------------------------------------------------------------------ */
@@ -284,7 +429,7 @@
 
     view.querySelector('#share-btn').addEventListener('click', () => {
       Transfer.deliver(Transfer.shareFileName(r), shareData, r.title)
-        .then((result) => result === 'downloaded' && toast('Recipe file downloaded.'));
+        .then((result) => reportDelivery(result, 'Recipe file'));
     });
 
     view.querySelector('#delete-btn').addEventListener('click', async () => {
@@ -580,12 +725,14 @@
 
         <section class="panel">
           <h3>Import</h3>
-          <p>Add recipes from a Cookbook backup or a shared recipe file. If anything in
-             the file is invalid, nothing is imported.</p>
+          <p>Add recipes from a backup (<code>.cookbook</code>), a shared recipe
+             (<code>.recipe</code>) or an older <code>.json</code> export. If anything
+             in the file is invalid, nothing is imported.</p>
+          <!-- No "accept" limit: iOS doesn't know .recipe or .cookbook and would
+               grey them out. The file's contents decide whether it's valid. -->
           <label class="btn btn-secondary file-btn">
             Choose file…
-            <input type="file" id="import-input" class="visually-hidden"
-                   accept=".json,application/json,text/plain">
+            <input type="file" id="import-input" class="visually-hidden">
           </label>
           <div id="import-result" aria-live="polite"></div>
         </section>
@@ -594,7 +741,7 @@
 
     view.querySelector('#export-btn').addEventListener('click', () => {
       Transfer.deliver(Transfer.backupFileName(), backupData, 'Cookbook backup')
-        .then((result) => result === 'downloaded' && toast('Backup downloaded.'));
+        .then((result) => reportDelivery(result, 'Backup'));
     });
 
     const input = view.querySelector('#import-input');
@@ -610,7 +757,8 @@
         const parsed = Transfer.parse(await Transfer.readFile(file));
         const plan = await Transfer.plan(parsed.recipes, await DB.getAllRecipes(), askConflict);
         await DB.importRecipes(plan.recipes, parsed.tags);
-        result.innerHTML = importReport(plan);
+        result.innerHTML = '';
+        await showImportComplete(plan);
       } catch (err) {
         console.error(err);
         const message = err.name === 'ImportError' ? err.message
@@ -625,24 +773,45 @@
     });
   }
 
-  /** What happened, plus any warnings, after a successful import. */
-  function importReport({ summary, warnings }) {
-    const parts = [
-      summary.added && `${summary.added} added`,
-      summary.overwritten && `${summary.overwritten} overwritten`,
-      summary.keptBoth && `${summary.keptBoth} added as a second copy`,
-      summary.ignored && `${summary.ignored} ignored`,
-    ].filter(Boolean);
-    return `
-      <div class="notice notice-ok">
-        <p><strong>Import finished:</strong> ${esc(parts.join(', ') || 'nothing to import')}.</p>
-        <a class="btn btn-secondary" href="#/">View recipes</a>
-      </div>
-      ${warnings.length ? `
-        <div class="notice notice-warn">
-          <p><strong>Renamed:</strong></p>
-          <ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>
-        </div>` : ''}`;
+  /**
+   * "Import complete" message, shown only after recipes were saved (never
+   * for a cancelled import or an invalid file). Resolves when OK is tapped.
+   * "Added" counts new recipes plus Keep both copies.
+   */
+  function showImportComplete({ summary, warnings }) {
+    const added = summary.added + summary.keptBoth;
+    const rows = [
+      ['Added', added, summary.keptBoth ? `including ${summary.keptBoth} kept as a second copy` : ''],
+      ['Overwritten', summary.overwritten, ''],
+      ['Ignored', summary.ignored, ''],
+      ['Renamed with “-new”', warnings.length, ''],
+    ];
+    return new Promise((resolve) => {
+      const dialog = document.createElement('dialog');
+      dialog.className = 'dialog';
+      dialog.id = 'import-complete';
+      dialog.setAttribute('aria-labelledby', 'import-complete-title');
+      dialog.innerHTML = `
+        <form method="dialog">
+          <h3 id="import-complete-title">Import complete</h3>
+          <dl class="import-counts">
+            ${rows.map(([label, n, note]) => `
+              <div data-count="${esc(label)}">
+                <dt>${esc(label)}${note ? `<span class="muted"> (${esc(note)})</span>` : ''}</dt>
+                <dd>${n}</dd>
+              </div>`).join('')}
+          </dl>
+          ${warnings.length ? `
+            <ul class="dialog-help muted">${warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+          <button class="btn btn-primary" value="ok">OK</button>
+        </form>`;
+      document.body.append(dialog);
+      dialog.addEventListener('close', () => {
+        dialog.remove();
+        resolve();
+      });
+      dialog.showModal();
+    });
   }
 
   /**
@@ -725,6 +894,7 @@
       else if (page === 'new') await showForm(null);
       else if (page === 'edit' && id) await showForm(id);
       else if (page === 'backup') await showBackup();
+      else if (page === 'tags') await showTags();
       else showNotFound();
     } catch (err) {
       console.error(err);
