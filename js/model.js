@@ -21,8 +21,12 @@
  *     id:       "i_…"   stable id, so steps can point at it even if the list is reordered
  *     amount:   "2 cups" free text: quantity + unit, as you'd write it
  *     name:     "flour"
- *     recipeId: null     FUTURE: id of another recipe this ingredient is made from
- *                        (e.g. "pizza dough" → the Pizza Dough recipe). Not used by the UI yet.
+ *     recipeId: null     id of another recipe this ingredient is made from
+ *                        (e.g. "pizza dough" → the Pizza Dough recipe), or null.
+ *                        Set with the link control in the form; the picker offers
+ *                        recipes with mealType "other". The link may point at a
+ *                        recipe that isn't on this device (shown as plain text).
+ *                        Deleting a recipe sets links to it back to null (db.js).
  *   }
  *
  *   Step = {
@@ -32,9 +36,9 @@
  *                         tap-to-see-ingredients popup. Not used by the UI yet.
  *   }
  *
- * The future fields are stored now (as null / empty) so that adding those
- * features later needs no data migration, and editing a recipe in this
- * version keeps whatever values they already hold.
+ * The future field (ingredientIds) is stored now (as empty) so that adding
+ * that feature later needs no data migration, and editing a recipe in this
+ * version keeps whatever values it already holds.
  *
  * Schema history:
  *   1  first version. Tags were lower-cased, typed as comma-separated text.

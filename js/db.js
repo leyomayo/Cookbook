@@ -142,8 +142,34 @@ const DB = (() => {
     return putRecipes(recipes, { extraTags, touch: false });
   }
 
-  function deleteRecipe(id) {
-    return write([RECIPES], (tx) => tx.objectStore(RECIPES).delete(id));
+  /**
+   * Delete a recipe and, in the same transaction, unlink every ingredient
+   * that points at it (recipeId → null), so those ingredients become plain
+   * text. Either both happen or neither does. Resolves to the number of
+   * recipes that were unlinked.
+   */
+  async function deleteRecipe(id) {
+    let unlinked = 0;
+    await write([RECIPES], (tx) => {
+      const store = tx.objectStore(RECIPES);
+      store.delete(id);
+      store.openCursor().onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (!cursor) return;
+        const row = cursor.value;
+        const ingredients = Array.isArray(row.ingredients) ? row.ingredients : [];
+        if (ingredients.some((i) => i && i.recipeId === id)) {
+          unlinked += 1;
+          cursor.update({
+            ...row,
+            ingredients: ingredients.map((i) => (i && i.recipeId === id ? { ...i, recipeId: null } : i)),
+            updatedAt: Date.now(),
+          });
+        }
+        cursor.continue();
+      };
+    });
+    return unlinked;
   }
 
   /* ---------- Tag list ---------- */

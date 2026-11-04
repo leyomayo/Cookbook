@@ -282,6 +282,23 @@ input, textarea, select, button { font: inherit; color: inherit; }
 }
 .ingredient-list li:last-child { border-bottom: 0; }
 .amount { font-weight: 600; min-width: 5.5em; }
+/* A linked ingredient (a homemade sauce, broth…) opens its own recipe. */
+.ingredient-list li.is-linked { align-items: center; padding: 0; }
+.ingredient-list li.is-linked .amount { padding: 10px 0; }
+.ing-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--tap);
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.ing-link:active { opacity: 0.6; }
+/* inline-block stops the link's underline reaching the arrow. */
+.ing-link-icon { display: inline-block; font-size: 22px; line-height: 1; text-decoration: none; }
 
 .step-list { margin: 0; padding: 0; list-style: none; counter-reset: step; }
 .step-list li {
@@ -368,6 +385,23 @@ input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 
   font-weight: 700;
   font-size: 15px;
 }
+
+/* Link control on an ingredient row, and the "Links to …" line under it. */
+.link-btn[data-linked] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+.link-info {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  padding: 2px 4px 2px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  font-size: 15px;
+}
+.link-info-text { min-width: 0; overflow-wrap: anywhere; }
+.link-info .link-remove { color: var(--accent); font-weight: 600; padding: 0 8px; }
 
 .form-actions { display: flex; gap: 10px; padding-bottom: 24px; }
 .form-actions .btn { flex: 1; }
@@ -591,3 +625,27 @@ input[type="search"].tag-search {
 }
 .import-counts dt { font-weight: 500; }
 .import-counts dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* ---------- Recipe picker (link an ingredient) ---------- */
+
+.picker .tag-search { background: var(--bg); }
+.picker-list { overflow-y: auto; min-height: 0; max-height: 50vh; max-height: 50dvh; -webkit-overflow-scrolling: touch; }
+.picker-list ul { list-style: none; margin: 0; padding: 0; }
+.picker-list li { border-bottom: 1px solid var(--border); }
+.picker-list li:last-child { border-bottom: 0; }
+.picker-option {
+  display: flex;
+  width: 100%;
+  min-height: var(--tap);
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 4px;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.picker-option:active { background: var(--surface-2); }
+.picker-option[aria-current="true"] { font-weight: 600; }
+.picker-empty { margin: 0; padding: 8px 0; }
