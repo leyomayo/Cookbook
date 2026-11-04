@@ -63,6 +63,18 @@ html {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The background is on html too, so any frame drawn during launch is plain. */
+html { background: var(--bg); }
+
+/* Launch: keep the page hidden until the first screen is drawn at normal
+   zoom (see index.html). The animation reveals it after 1.5 s regardless. */
+.booting .app-header,
+.booting .view {
+  opacity: 0;
+  animation: boot-reveal 0s linear 1.5s forwards;
+}
+@keyframes boot-reveal { to { opacity: 1; } }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -306,19 +318,44 @@ input, textarea, select, button { font: inherit; color: inherit; }
 .ing-link:active { opacity: 0.6; }
 
 .step-list { margin: 0; padding: 0; list-style: none; counter-reset: step; }
-.step-list li {
-  counter-increment: step;
-  position: relative;
-  padding: 0 0 18px 44px;
-  min-height: 32px;
+.step-list li { position: relative; }
+
+/* ---------- Step ingredients: tap a step to see what it uses ---------- */
+
+.step-hint { margin: -6px 0 12px; font-size: 15px; }
+
+/* Each step is two buttons that look like plain content: the number (a
+   44px-wide column down the left, the full height of the step) and the
+   text. Together they cover the whole step, spacing included. */
+.step-btn {
+  display: block;
+  width: 100%;
+  min-height: 50px;
+  padding: 2px 0 18px 44px;
+  border: 0;
+  background: none;
+  text-align: left;
+  line-height: inherit;
+  cursor: pointer;
 }
-.step-list li::before {
-  content: counter(step);
+.step-num-btn {
   position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
   left: 0;
-  top: -2px;
+  width: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  display: flex;
+  align-items: flex-start;
+  cursor: pointer;
+}
+.step-num-mark {
   width: 30px;
   height: 30px;
+  margin-top: -2px;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -327,28 +364,19 @@ input, textarea, select, button { font: inherit; color: inherit; }
   font-weight: 700;
   font-size: 15px;
 }
-
-/* ---------- Step ingredients: tap a step to see what it uses ---------- */
-
-.step-hint { margin: -6px 0 12px; font-size: 15px; }
-
-/* The whole step is the button; it looks like plain text. */
-.step-btn {
-  display: block;
-  width: 100%;
-  min-height: 32px;
-  padding: 2px 0;
-  border: 0;
-  background: none;
-  text-align: left;
-  line-height: inherit;
-  cursor: pointer;
-}
 /* Selected step: its number turns from dark orange to a lighter shade. */
-.step-list li.is-selected::before {
+.step-list li.is-selected .step-num-mark {
   background: var(--step-selected);
   color: var(--step-selected-text);
 }
+/* Checked-off step: a tick in place of the number, text dimmed. */
+.step-list li.is-checked .step-num-mark {
+  background: var(--surface-2);
+  color: var(--lunch);
+  border: 2px solid var(--lunch);
+}
+.step-list li.is-checked.is-selected .step-num-mark { background: var(--step-selected); }
+.step-list li.is-checked .step-btn { color: var(--muted); }
 
 /* iPhone: a bar fixed to the bottom, scrolling sideways through the
    selected step's ingredients. Hidden on iPad (see the wide layout). */

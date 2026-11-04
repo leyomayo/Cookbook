@@ -12,7 +12,8 @@
  * .cookbook export and the share-sheet fallbacks, import checks and the
  * "Import complete" counts, importing old .json files, offline loading with
  * the current cache, recipe links (section G) and step ingredient
- * highlighting (section H).
+ * highlighting and step checking (section H), the update notice and the
+ * launch reveal (section I).
  */
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -335,11 +336,11 @@ async function suite(browser, tag, device) {
   await page.screenshot({ path: SP + `/${tag}-v3-list-2.png` });
 
 
-  // ---------- F. Offline with cache v7 ----------
+  // ---------- F. Offline with cache v8 ----------
   await page.goto(URL0); await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload(); await page.waitForSelector('.card');
   const keys = await page.evaluate(() => caches.keys());
-  ok(JSON.stringify(keys) === '["cookbook-v7"]', 'only cache cookbook-v7', keys);
+  ok(JSON.stringify(keys) === '["cookbook-v8"]', 'only cache cookbook-v8', keys);
   await ctx.setOffline(true);
   for (const h of ['#/', '#/tags', '#/backup', '#/new']) {
     await page.goto(URL0 + h); await page.reload();
@@ -355,6 +356,9 @@ async function suite(browser, tag, device) {
 
   // ---------- H. Step ingredients ----------
   await stepTests(browser, tag, device, errors);
+
+  // ---------- I. Update notice and launch ----------
+  await updateTests(browser, tag, device, errors);
 
   ok(errors.length === 0, `${tag}: no page errors`, errors);
 }
@@ -690,8 +694,8 @@ async function stepTests(browser, tag, device, errors) {
       barShown: getComputedStyle(bar).display !== 'none',
       barChips: [...bar.querySelectorAll('.step-chip')].map(c => c.textContent.replace(/\s+/g, ' ').trim()),
       barAtBottom: Math.round(r.bottom) === innerHeight && getComputedStyle(bar).position === 'fixed',
-      numberColor: (() => { const li = document.querySelector('.step-list li.is-selected'); return li && getComputedStyle(li, '::before').backgroundColor; })(),
-      plainColor: getComputedStyle(document.querySelector('.step-list li:not(.is-selected)'), '::before').backgroundColor,
+      numberColor: (() => { const li = document.querySelector('.step-list li.is-selected'); return li && getComputedStyle(li.querySelector('.step-num-mark')).backgroundColor; })(),
+      plainColor: getComputedStyle(document.querySelector('.step-list li:not(.is-selected) .step-num-mark')).backgroundColor,
     };
   });
 
@@ -758,7 +762,67 @@ async function stepTests(browser, tag, device, errors) {
   await page.focus('.step-list li:nth-child(1) .step-btn'); await page.keyboard.press('Enter'); s = await state();
   ok(s.selected.join() === '1', T('a step can be selected with the keyboard'), s);
 
+  // ---- Whole step is one tap target, number included ----
+  await open('rPasta');
+  await page.$eval('.step-list li:nth-child(4)', li => li.scrollIntoView({ block: 'center' }));
+  const geo = await page.evaluate(() => {
+    const li = document.querySelector('.step-list li:nth-child(4)'), r = li.getBoundingClientRect();
+    const num = li.querySelector('.step-num-btn').getBoundingClientRect(), txt = li.querySelector('.step-btn').getBoundingClientRect();
+    // Sample points across the step, including the gap by the number and below it.
+    const pts = [[r.left + 4, r.top + 4], [r.left + 15, r.top + 14], [r.left + 38, r.top + 10], [r.left + 15, r.bottom - 4], [r.left + 40, r.bottom - 4], [r.right - 4, r.bottom - 4], [r.left + 100, r.top + 10]];
+    const hits = pts.map(([x, y]) => { const el = document.elementFromPoint(x, y); return el && el.closest('li') === li && !!el.closest('.step-num-btn, .step-btn'); });
+    const next = document.querySelector('.step-list li:nth-child(5)').getBoundingClientRect();
+    return { hits, numW: num.width, numH: Math.round(num.height), liH: Math.round(r.height), gap: Math.round(next.top - r.bottom), txtBottom: Math.round(txt.bottom), liBottom: Math.round(r.bottom) };
+  });
+  ok(geo.hits.every(Boolean), T('every point of a step is a tap target (number column, gap, below the number, end of the text)'), geo);
+  ok(geo.numW >= 44 && geo.numH === geo.liH && geo.gap === 0 && geo.txtBottom === geo.liBottom, T('number column is 44px wide and full height; no dead space between steps'), geo);
+  const tapNum = (n) => page.click(`.step-list li:nth-child(${n}) .step-num-btn`);
+  const marks = () => page.$$eval('.step-num-mark', l => l.map(x => x.textContent).join(''));
+  const checkedSteps = () => page.$$eval('.step-list li', l => l.map((li, n) => li.classList.contains('is-checked') ? n + 1 : 0).filter(Boolean).join());
+  await tapNum(2); s = await state();
+  ok(s.selected.join() === '2' && s.listMatches.join() === 'a2,a4', T('tapping the number of an unselected step selects it'), s);
+
+  // ---- Check off and uncheck ----
+  ok(await page.getAttribute('.step-list li:nth-child(2) .step-num-btn', 'aria-label') === 'Step 2. Tap to check off', T('selected number says it checks off'));
+  await tapNum(2); s = await state();
+  ok(await checkedSteps() === '2' && s.selected.join() === '3', T('tapping the selected step\'s number checks it and selects the next step'), { c: await checkedSteps(), s });
+  ok(await marks() === '1✓345' && await page.getAttribute('.step-list li:nth-child(2) .step-num-btn', 'aria-label') === 'Step 2, done. Tap to uncheck', T('checked step shows a tick'), await marks());
+  ok(s.listMatches.join() === 'a3', T('next step\'s ingredients are shown'), s.listMatches);
+  await page.click('.step-list li:nth-child(3) .step-btn'); s = await state();
+  ok(!s.selected.length && await checkedSteps() === '2', T('tapping the selected step\'s text clears the highlight only'), s);
+  await page.click('.step-list li:nth-child(1) .step-btn'); await tapNum(1); s = await state();
+  ok(await checkedSteps() === '1,2' && s.selected.join() === '3', T('next step skips steps already checked'), { c: await checkedSteps(), s });
+  await tapNum(2); s = await state();
+  ok(await checkedSteps() === '1' && s.selected.join() === '3', T('tapping a checked step\'s number unchecks it, selection stays'), { c: await checkedSteps(), s });
+  await page.click('.step-list li:nth-child(5) .step-btn'); await tapNum(5); s = await state();
+  ok(await checkedSteps() === '1,5' && !s.selected.length, T('checking the last step clears the highlight'), { c: await checkedSteps(), s });
+  await page.click('.step-list li:nth-child(1) .step-btn'); s = await state();
+  ok(s.selected.join() === '1' && await checkedSteps() === '1,5', T('tapping a checked step\'s text selects it and keeps the check'), s);
+  await page.click('.step-list li:nth-child(1) .step-btn');
+  const doneColor = await page.$eval('.step-list li:nth-child(1) .step-btn', el => getComputedStyle(el).color);
+  const plainText = await page.$eval('.step-list li:nth-child(2) .step-btn', el => getComputedStyle(el).color);
+  ok(doneColor !== plainText, T('checked step text is dimmed'), { doneColor, plainText });
+  await page.screenshot({ path: SP + `/${tag}-steps-checked.png` });
+
+  // ---- Checks persist through a linked recipe; cleared by the recipe list ----
+  await tapNum(4); // select step 4 (has the pesto link)
+  const link = wide ? '.ingredient-list .ing-link' : '#step-bar .ing-link';
+  await page.click(link); await page.waitForSelector('.detail-title:has-text("Basil Pesto")');
+  await page.click('.step-list li:nth-child(1) .step-num-btn'); await page.click('.step-list li:nth-child(1) .step-num-btn');
+  ok(await checkedSteps() === '1', T('linked recipe has its own checks'));
+  await page.click('#header-left a'); await page.waitForSelector('.detail-title:has-text("Garlic Butter Pasta")');
+  ok(await checkedSteps() === '1,5' && await marks() === '✓234✓', T('checks are still there after opening a linked recipe and coming back'), await marks());
+  await page.click('.ingredient-list .ing-link'); await page.waitForSelector('.detail-title:has-text("Basil Pesto")');
+  ok(await checkedSteps() === '1', T('linked recipe keeps its checks too'));
+  await page.click('#header-left a'); await page.waitForSelector('.detail-title:has-text("Garlic Butter Pasta")');
+  await page.click('#header-left a'); await page.waitForSelector('#recipe-grid .card');
+  await page.click('.card:has-text("Garlic Butter Pasta")'); await page.waitForSelector('.step-num-btn');
+  ok(await checkedSteps() === '' && await marks() === '12345', T('returning to the recipe list clears the checks'), await marks());
+  // Checks aren't saved anywhere.
+  ok(JSON.stringify(await page.evaluate(() => DB.getAllRecipes())) === JSON.stringify(before), T('checking steps doesn\'t change stored recipes'));
+
   // Dark mode: selected number is still lighter than the others.
+  await page.click('.step-list li:nth-child(2) .step-btn');
   await page.emulateMedia({ colorScheme: 'dark' }); s = await state();
   ok(s.plainColor === 'rgb(224, 122, 75)' && s.numberColor === 'rgb(246, 195, 168)', T('dark mode: selected number is lighter'), s);
   await page.screenshot({ path: SP + `/${tag}-steps-dark.png` });
@@ -767,4 +831,93 @@ async function stepTests(browser, tag, device, errors) {
   const after = await page.evaluate(() => DB.getAllRecipes());
   ok(JSON.stringify(after) === JSON.stringify(before), T('recipes are unchanged in storage'));
   await ctx.close();
+}
+
+
+/*
+ * I. Automatic update with an "updated" message, and the launch reveal.
+ * A new version is simulated with a small server of our own (port 8766) that
+ * serves sw.js with a different CACHE_VERSION. (Playwright can't intercept
+ * the service worker script itself.)
+ */
+async function updateTests(browser, tag, device, errors) {
+  const path = require('path'), root = path.join(__dirname, '..');
+  const real = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+  let swVersion = null; // null = serve sw.js as it is
+  const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
+  const server = require('http').createServer((req, res) => {
+    let file = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    if (file.endsWith('/')) file += 'index.html';
+    const full = path.join(root, file);
+    if (!full.startsWith(root) || !fs.existsSync(full)) { res.writeHead(404); return res.end(); }
+    let body = fs.readFileSync(full);
+    if (file === '/sw.js' && swVersion) body = real.replace(/CACHE_VERSION = 'v\d+'/, `CACHE_VERSION = '${swVersion}'`);
+    res.writeHead(200, { 'Content-Type': types[path.extname(full)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+    res.end(body);
+  });
+  await new Promise(r => server.listen(8766, r));
+  const URL1 = 'http://localhost:8766/';
+  const ctx = await browser.newContext({ ...devices[device] });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(e.message));
+  const T = (msg) => `update (${tag}): ${msg}`;
+
+  // Launch: page hidden until the first screen is drawn, then shown.
+  await page.goto(URL1);
+  await page.waitForSelector('#recipe-grid');
+  await page.waitForFunction(() => !document.documentElement.classList.contains('booting'));
+  const shown = await page.evaluate(() => [getComputedStyle(document.querySelector('.view')).opacity, getComputedStyle(document.querySelector('.app-header')).opacity, visualViewport.scale]);
+  ok(shown[0] === '1' && shown[1] === '1' && shown[2] === 1, T('page is revealed after the first screen, at normal zoom'), shown);
+  // Fallback: even if the app's script never runs, CSS reveals the page.
+  const noJs = await browser.newContext({ ...devices[device], javaScriptEnabled: false });
+  const nj = await noJs.newPage(); await nj.goto(URL1);
+  const hiddenAtStart = await nj.evaluate(() => getComputedStyle(document.querySelector('.view')).opacity);
+  await nj.waitForTimeout(1800);
+  const later = await nj.evaluate(() => getComputedStyle(document.querySelector('.view')).opacity);
+  ok(hiddenAtStart === '0' && later === '1', T('without the script, the page still appears after 1.5 s'), { hiddenAtStart, later });
+  await noJs.close();
+
+  // First install: no message.
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+  await page.reload(); await page.waitForSelector('#recipe-grid'); await page.waitForTimeout(300);
+  ok((await page.$$('#update-notice')).length === 0, T('no message on first install or a normal launch'));
+
+  // A new version: served with a different CACHE_VERSION.
+  swVersion = 'v99';
+
+  // While on the form, the reload waits so typing isn't lost.
+  await page.goto(URL1 + '#/new'); await page.waitForSelector('input[name=title]');
+  await page.fill('input[name=title]', 'Half typed');
+  await page.evaluate(() => { window.__still = true; });
+  await page.evaluate(() => navigator.serviceWorker.getRegistration().then(r => r.update()));
+  await page.waitForFunction(() => caches.keys().then(k => k.join() === 'cookbook-v99'), null, { timeout: 10000 });
+  await page.waitForTimeout(800);
+  const stayed = await page.evaluate(() => [window.__still === true, document.querySelector('input[name=title]')?.value]);
+  ok(stayed[0] && stayed[1] === 'Half typed', T('update waits while the form is open (nothing typed is lost)'), stayed);
+
+  // Leaving the form: reload onto the new version, then the message.
+  const nav = page.waitForNavigation();
+  await page.click('#header-left a');
+  await nav;
+  await page.waitForSelector('#update-notice[open]', { timeout: 10000 });
+  const msg = await page.textContent('#update-notice');
+  ok(/Cookbook updated/.test(msg) && /version 99\./.test(msg), T('after updating, a message shows the new version number'), msg.replace(/\s+/g, ' '));
+  const keys = await page.evaluate(() => caches.keys());
+  ok(JSON.stringify(keys) === '["cookbook-v99"]', T('new version\'s files are in use (old cache removed)'), keys);
+  await page.screenshot({ path: SP + `/${tag}-update-notice.png` });
+  await page.click('#update-notice button[value=ok]');
+  await page.waitForSelector('#update-notice', { state: 'detached' });
+  await page.reload(); await page.waitForSelector('#recipe-grid'); await page.waitForTimeout(500);
+  ok((await page.$$('#update-notice')).length === 0, T('message shows only once'));
+
+  // Update while on the list: reloads straight away.
+  swVersion = 'v100';
+  const nav2 = page.waitForNavigation({ timeout: 10000 });
+  await page.evaluate(() => navigator.serviceWorker.getRegistration().then(r => r.update()));
+  await nav2;
+  await page.waitForSelector('#update-notice[open]', { timeout: 10000 });
+  ok(/version 100\./.test(await page.textContent('#update-notice')), T('on other screens the update applies straight away'));
+  await ctx.close();
+  await new Promise(r => server.close(r));
 }

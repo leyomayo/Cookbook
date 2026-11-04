@@ -387,6 +387,13 @@
   /* Screen: recipe detail                                               */
   /* ------------------------------------------------------------------ */
 
+  /**
+   * Checked-off direction steps: recipe id → Set of step ids. Kept in memory
+   * only (never saved), so they last while you move between a recipe and its
+   * linked recipes, and are cleared when you go back to the recipe list.
+   */
+  const stepChecks = new Map();
+
   async function showDetail(id, trail = []) {
     const all = await DB.getAllRecipes();
     const byId = new Map(all.map((x) => [x.id, x]));
@@ -466,10 +473,12 @@
           <section class="panel">
             <h3>Directions</h3>
             ${r.steps.length ? `
-              <p class="muted step-hint">Tap a step to see its ingredients.</p>
+              <p class="muted step-hint">Tap a step to see its ingredients. Tap its number again to check it off.</p>
               <ol class="step-list">
-                ${r.steps.map((s) => `
+                ${r.steps.map((s, n) => `
                   <li data-step-id="${esc(s.id)}">
+                    <button type="button" class="step-num-btn" data-step="${esc(s.id)}" data-n="${n + 1}"
+                            aria-label="Step ${n + 1}"><span class="step-num-mark" aria-hidden="true">${n + 1}</span></button>
                     <button type="button" class="step-btn" data-step="${esc(s.id)}" aria-pressed="false">${esc(s.text)}</button>
                   </li>`).join('')}
               </ol>` : '<p class="muted">No directions yet.</p>'}
@@ -488,21 +497,61 @@
     `;
 
     /*
-     * Step selection: tap a step to select it, tap it again to clear, or tap
-     * another step to move the selection. The selected step's ingredients
-     * are highlighted in the list (iPad) and shown in the bottom bar
-     * (iPhone); CSS decides which one is visible at each width.
+     * Step selection and checking. Each step has two tap targets: its number
+     * and its text. The selected step's ingredients are highlighted in the
+     * list (iPad) and shown in the bottom bar (iPhone); CSS decides which
+     * one is visible at each width.
+     *
+     *   Tap a step that isn't selected (number or text) → select it
+     *   Tap the selected step's text                    → clear the selection
+     *   Tap the selected step's number                  → check it off and
+     *                                                     select the next unchecked step
+     *   Tap a checked step's number                     → uncheck it
+     *
+     * Checks are kept per recipe while the app is open (stepChecks), so they
+     * survive opening a linked recipe and coming back. Going to the recipe
+     * list clears them (see route()).
      */
     const stepBar = view.querySelector('#step-bar');
     let selectedStep = null;
+    if (!stepChecks.has(r.id)) stepChecks.set(r.id, new Set());
+    const checked = stepChecks.get(r.id);
+
+    /** The first unchecked step after `stepId`, or null at the end. */
+    function nextUnchecked(stepId) {
+      const from = r.steps.findIndex((s) => s.id === stepId);
+      return r.steps.slice(from + 1).find((s) => !checked.has(s.id))?.id ?? null;
+    }
+
+    function tapStep(stepId, onNumber) {
+      if (onNumber && checked.has(stepId)) {
+        checked.delete(stepId);
+      } else if (stepId !== selectedStep) {
+        selectedStep = stepId;
+      } else if (onNumber) {
+        checked.add(stepId);
+        selectedStep = nextUnchecked(stepId);
+      } else {
+        selectedStep = null;
+      }
+      renderStepSelection();
+    }
 
     function renderStepSelection() {
       const matches = selectedStep ? stepMatches.get(selectedStep) : [];
       const matchIds = new Set(matches.map((i) => i.id));
-      view.querySelectorAll('.step-btn').forEach((btn) => {
-        const on = btn.dataset.step === selectedStep;
-        btn.setAttribute('aria-pressed', String(on));
-        btn.closest('li').classList.toggle('is-selected', on);
+      view.querySelectorAll('.step-list li').forEach((li) => {
+        const id = li.dataset.stepId;
+        const on = id === selectedStep;
+        const done = checked.has(id);
+        li.classList.toggle('is-selected', on);
+        li.classList.toggle('is-checked', done);
+        li.querySelector('.step-btn').setAttribute('aria-pressed', String(on));
+        const num = li.querySelector('.step-num-btn');
+        const n = num.dataset.n;
+        num.querySelector('.step-num-mark').textContent = done ? '✓' : n;
+        num.setAttribute('aria-label', done ? `Step ${n}, done. Tap to uncheck`
+          : on ? `Step ${n}. Tap to check off` : `Step ${n}`);
       });
       view.querySelectorAll('.ingredient-list li').forEach((li) => {
         li.classList.toggle('is-match', matchIds.has(li.dataset.ingredientId));
@@ -525,11 +574,10 @@
     }
 
     view.querySelector('.step-list')?.addEventListener('click', (e) => {
-      const btn = e.target.closest('.step-btn');
-      if (!btn) return;
-      selectedStep = selectedStep === btn.dataset.step ? null : btn.dataset.step;
-      renderStepSelection();
+      const btn = e.target.closest('.step-btn, .step-num-btn');
+      if (btn) tapStep(btn.dataset.step, btn.classList.contains('step-num-btn'));
     });
+    renderStepSelection(); // show checks kept from earlier
 
     view.querySelector('#share-btn').addEventListener('click', () => {
       Transfer.deliver(Transfer.shareFileName(r), shareData, r.title)
@@ -1195,6 +1243,8 @@
     const id = rawId ? decodeURIComponent(rawId) : null;
     const trail = new URLSearchParams(query).getAll('from').filter(Boolean).slice(0, MAX_TRAIL);
 
+    if (!page) stepChecks.clear();
+
     try {
       if (!page) await showList();
       else if (page === 'recipe' && id) await showDetail(id, trail);
@@ -1213,7 +1263,24 @@
   }
 
   window.addEventListener('hashchange', route);
-  route();
+  route().then(revealWhenSettled);
+
+  /**
+   * Show the page (remove "booting", see index.html) once the first screen
+   * has rendered and the browser has drawn two frames at normal zoom. If the
+   * zoom isn't 1 yet, wait for it to settle, but never more than a second.
+   */
+  function revealWhenSettled() {
+    const vv = window.visualViewport;
+    const reveal = () => document.documentElement.classList.remove('booting');
+    const settled = () => !vv || Math.abs(vv.scale - 1) < 0.01;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (settled()) return reveal();
+      const done = () => { if (settled()) { vv.removeEventListener('resize', done); reveal(); } };
+      vv.addEventListener('resize', done);
+      setTimeout(reveal, 1000);
+    }));
+  }
 
   /* ------------------------------------------------------------------ */
   /* Offline support                                                     */
@@ -1223,6 +1290,81 @@
 
   // Service workers need https (GitHub Pages) or localhost.
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-    navigator.serviceWorker.register('sw.js').catch((err) => console.warn('Service worker failed:', err));
+    setUpUpdates(navigator.serviceWorker);
+  }
+
+  /*
+   * Automatic updates. sw.js takes over as soon as a new version installs.
+   * When that happens while the app is open, reload onto the new files and
+   * then say so. A first install isn't an update, so it's silent.
+   *
+   * The reload waits while you're on the add/edit form or a dialog is open,
+   * so nothing you're typing is lost; it happens on your next screen change.
+   */
+  function setUpUpdates(sw) {
+    const wasControlled = Boolean(sw.controller);
+    let updateReady = false;
+
+    const busy = () => /^#\/(new|edit)(\/|$)/.test(location.hash) || Boolean(document.querySelector('dialog[open]'));
+    function reloadForUpdate() {
+      if (!updateReady || busy()) return;
+      updateReady = false;
+      prefs.set('justUpdated', '1');
+      location.reload();
+    }
+
+    sw.addEventListener('controllerchange', () => {
+      if (!wasControlled) return; // first install
+      updateReady = true;
+      reloadForUpdate();
+    });
+    window.addEventListener('hashchange', reloadForUpdate);
+
+    sw.register('sw.js')
+      .then((reg) => {
+        // Home Screen apps often resume instead of relaunching; check then too.
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') reg.update().catch(() => {});
+        });
+      })
+      .catch((err) => console.warn('Service worker failed:', err));
+
+    if (prefs.get('justUpdated', '') === '1') {
+      prefs.set('justUpdated', '');
+      askVersion(sw).then(showUpdated);
+    }
+  }
+
+  /** The running version from sw.js, e.g. "v8", or "" if it doesn't answer. */
+  function askVersion(sw) {
+    return sw.ready.then((reg) => new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(''), 3000);
+      sw.addEventListener('message', function onMessage(e) {
+        if (e.data?.type !== 'version') return;
+        sw.removeEventListener('message', onMessage);
+        clearTimeout(timer);
+        resolve(String(e.data.version || ''));
+      });
+      (sw.controller || reg.active).postMessage({ type: 'get-version' });
+    }));
+  }
+
+  /** "Cookbook updated" message with the version number. */
+  function showUpdated(version) {
+    const number = version.replace(/^v/i, '');
+    const dialog = document.createElement('dialog');
+    dialog.className = 'dialog';
+    dialog.id = 'update-notice';
+    dialog.setAttribute('aria-labelledby', 'update-notice-title');
+    dialog.innerHTML = `
+      <form method="dialog">
+        <h3 id="update-notice-title">Cookbook updated</h3>
+        <p>${number ? `You're now on version ${esc(number)}.` : 'You\'re now on the latest version.'}
+           Your recipes weren't changed.</p>
+        <button class="btn btn-primary" value="ok">OK</button>
+      </form>`;
+    document.body.append(dialog);
+    dialog.addEventListener('close', () => dialog.remove());
+    dialog.showModal();
   }
 })();

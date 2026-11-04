@@ -91,6 +91,20 @@ number turns a lighter orange. Tap it again to clear it, or tap another step.
 
 Linked ingredients (see "Recipe links") are still links in both places.
 
+### Checking off steps
+
+The step's number and its text are both part of the step, so tapping anywhere
+on a step selects it.
+
+- Tap the selected step's **number** again to check it off. It shows a tick,
+  its text dims, and the next unchecked step is selected.
+- Tap the selected step's **text** again to clear the highlight. Checks stay.
+- Tap a checked step's **number** to uncheck it.
+
+Checks are kept while you open a linked recipe and come back (each recipe
+keeps its own). They're cleared when you go back to the recipe list, and
+they're never saved with the recipe.
+
 Ingredients are found by keyword, so nothing needs to be set up and existing
 recipes work as they are. A step mentions an ingredient when it contains any
 word of the ingredient's name, ignoring case, amounts and simple plurals
@@ -184,9 +198,12 @@ When you change any file:
 
 1. Bump `CACHE_VERSION` in `sw.js` (for example `'v1'` → `'v2'`).
 2. Commit and push.
-3. Open the app once online. It downloads the new version in the background
-   and uses it the next time you open the app. If you don't see the change,
-   close the app fully and open it again (it can take two or three launches).
+3. Open the app online. It checks for a new version when it opens and when
+   you switch back to it. The new version installs in the background and takes
+   over by itself: the app reloads and shows **Cookbook updated** with the
+   version number (`CACHE_VERSION` without the "v", for example "version 8").
+   If you're on the add/edit form or a message is open, the reload waits
+   until you move to another screen, so nothing you're typing is lost.
 
 Recipes aren't affected by updates, because they live in IndexedDB, not in the cache.
 When the data shape changes, the update converts existing recipes the first

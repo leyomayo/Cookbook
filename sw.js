@@ -8,9 +8,14 @@
  * WHEN YOU CHANGE ANY APP FILE: bump CACHE_VERSION below. The browser sees
  * sw.js has changed, installs the new version in the background, and the
  * next launch of the app uses the fresh files.
+ *
+ * Updates apply on their own: the new version takes over straight away
+ * (skipWaiting + clients.claim), the open page reloads onto it, and then
+ * shows an "updated" message with the version (see js/app.js). The page asks
+ * for the version with a { type: 'get-version' } message.
  */
 
-const CACHE_VERSION = 'v7';
+const CACHE_VERSION = 'v8';
 const CACHE_NAME = `cookbook-${CACHE_VERSION}`;
 
 // Relative paths, so this works under https://<user>.github.io/<repo>/.
@@ -66,4 +71,11 @@ self.addEventListener('fetch', (event) => {
       });
     })
   );
+});
+
+// The page asks which version is running, for the "updated" message.
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'get-version' && event.source) {
+    event.source.postMessage({ type: 'version', version: CACHE_VERSION });
+  }
 });
