@@ -66,14 +66,31 @@ html {
 /* The background is on html too, so any frame drawn during launch is plain. */
 html { background: var(--bg); }
 
-/* Launch: keep the page hidden until the first screen is drawn at normal
-   zoom (see index.html). The animation reveals it after 1.5 s regardless. */
-.booting .app-header,
-.booting .view {
-  opacity: 0;
-  animation: boot-reveal 0s linear 1.5s forwards;
+/* ---------- Launch logo (see index.html) ---------- */
+
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  pointer-events: none; /* never blocks taps, even if it gets stuck */
+  transition: opacity 0.35s ease;
+  /* Fallback: fade out after 4 s even if the app's script never hides it. */
+  animation: splash-fallback 0.35s ease 4s forwards;
 }
-@keyframes boot-reveal { to { opacity: 1; } }
+.splash-logo {
+  width: 120px;
+  height: 120px;
+  border-radius: 27px; /* like a Home Screen icon */
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+.splash.splash-done { opacity: 0; }
+@keyframes splash-fallback { to { opacity: 0; visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) {
+  .splash { transition: none; }
+}
 
 body {
   margin: 0;

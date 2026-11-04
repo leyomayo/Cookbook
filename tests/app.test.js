@@ -13,7 +13,7 @@
  * "Import complete" counts, importing old .json files, offline loading with
  * the current cache, recipe links (section G) and step ingredient
  * highlighting and step checking (section H), the update notice and the
- * launch reveal (section I).
+ * launch logo (section I).
  */
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
@@ -336,11 +336,11 @@ async function suite(browser, tag, device) {
   await page.screenshot({ path: SP + `/${tag}-v3-list-2.png` });
 
 
-  // ---------- F. Offline with cache v8 ----------
+  // ---------- F. Offline with cache v9 ----------
   await page.goto(URL0); await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload(); await page.waitForSelector('.card');
   const keys = await page.evaluate(() => caches.keys());
-  ok(JSON.stringify(keys) === '["cookbook-v8"]', 'only cache cookbook-v8', keys);
+  ok(JSON.stringify(keys) === '["cookbook-v9"]', 'only cache cookbook-v9', keys);
   await ctx.setOffline(true);
   for (const h of ['#/', '#/tags', '#/backup', '#/new']) {
     await page.goto(URL0 + h); await page.reload();
@@ -835,7 +835,7 @@ async function stepTests(browser, tag, device, errors) {
 
 
 /*
- * I. Automatic update with an "updated" message, and the launch reveal.
+ * I. Automatic update with an "updated" message, and the launch logo.
  * A new version is simulated with a small server of our own (port 8766) that
  * serves sw.js with a different CACHE_VERSION. (Playwright can't intercept
  * the service worker script itself.)
@@ -862,20 +862,73 @@ async function updateTests(browser, tag, device, errors) {
   page.on('pageerror', e => errors.push(e.message));
   const T = (msg) => `update (${tag}): ${msg}`;
 
-  // Launch: page hidden until the first screen is drawn, then shown.
-  await page.goto(URL1);
+  // ---- Launch logo ----
+  // Record when the logo starts fading and when it's removed, from page start.
+  const watchSplash = (c) => c.addInitScript(() => {
+    window.__splash = {};
+    new MutationObserver(() => {
+      const el = document.getElementById('splash');
+      if (el && !window.__splash.seen) window.__splash.seen = Math.round(performance.now());
+      if (el && el.classList.contains('splash-done') && !window.__splash.done) window.__splash.done = Math.round(performance.now());
+      if (!el && window.__splash.seen && !window.__splash.removed) window.__splash.removed = Math.round(performance.now());
+    }).observe(document, { subtree: true, childList: true, attributes: true });
+  });
+  await watchSplash(ctx);
+  await page.goto(URL1, { waitUntil: 'commit' });
+  await page.waitForSelector('#splash');
+  const early = await page.evaluate(() => {
+    const sp = document.getElementById('splash'), r = sp.getBoundingClientRect(), img = sp.querySelector('img').getBoundingClientRect();
+    return { op: getComputedStyle(sp).opacity, full: r.width === innerWidth && r.height === innerHeight,
+      centered: Math.abs(img.left + img.width / 2 - innerWidth / 2) < 1 && Math.abs(img.top + img.height / 2 - innerHeight / 2) < 1,
+      src: sp.querySelector('img').getAttribute('src'), bg: getComputedStyle(sp).backgroundColor === getComputedStyle(document.body).backgroundColor };
+  });
+  ok(early.op === '1' && early.full && early.centered && early.bg, T('launch: logo shows centered on the app background'), early);
+  ok(early.src === 'icons/icon-512.png', T('launch: logo is the app icon'), early.src);
   await page.waitForSelector('#recipe-grid');
-  await page.waitForFunction(() => !document.documentElement.classList.contains('booting'));
-  const shown = await page.evaluate(() => [getComputedStyle(document.querySelector('.view')).opacity, getComputedStyle(document.querySelector('.app-header')).opacity, visualViewport.scale]);
-  ok(shown[0] === '1' && shown[1] === '1' && shown[2] === 1, T('page is revealed after the first screen, at normal zoom'), shown);
-  // Fallback: even if the app's script never runs, CSS reveals the page.
-  const noJs = await browser.newContext({ ...devices[device], javaScriptEnabled: false });
-  const nj = await noJs.newPage(); await nj.goto(URL1);
-  const hiddenAtStart = await nj.evaluate(() => getComputedStyle(document.querySelector('.view')).opacity);
-  await nj.waitForTimeout(1800);
-  const later = await nj.evaluate(() => getComputedStyle(document.querySelector('.view')).opacity);
-  ok(hiddenAtStart === '0' && later === '1', T('without the script, the page still appears after 1.5 s'), { hiddenAtStart, later });
-  await noJs.close();
+  await page.waitForFunction(() => window.__splash.removed, null, { timeout: 5000 });
+  let sp = await page.evaluate(() => window.__splash);
+  ok(sp.done >= 1000 && sp.done < 1600 && sp.removed > sp.done, T('launch: shown about 1 s, then fades out and is removed'), sp);
+  await page.screenshot({ path: SP + `/${tag}-after-launch.png` });
+
+  // Resume: switching back to an app that's still open doesn't reload the
+  // page, so the logo can't come back. Simulate the events iOS sends.
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    location.hash = '#/backup';
+  });
+  await page.waitForSelector('#export-btn'); await page.waitForTimeout(300);
+  ok(!(await page.$('#splash')), T('resume or moving between screens: no logo'));
+  await page.evaluate(() => { location.hash = '#/'; }); await page.waitForSelector('#recipe-grid');
+
+  // Slow first screen: the logo stays until it's ready.
+  const slow = await browser.newContext({ ...devices[device] });
+  await watchSplash(slow);
+  await slow.route('**/js/app.js', async (route) => { await new Promise(r => setTimeout(r, 2200)); await route.continue(); });
+  const sl = await slow.newPage(); await sl.goto(URL1, { waitUntil: 'commit' });
+  await sl.waitForTimeout(1500);
+  const midway = await sl.evaluate(() => [!!document.getElementById('splash'), getComputedStyle(document.getElementById('splash')).opacity]);
+  await sl.waitForSelector('#recipe-grid');
+  await sl.waitForFunction(() => window.__splash.removed, null, { timeout: 5000 });
+  sp = await sl.evaluate(() => window.__splash);
+  ok(midway[0] && midway[1] === '1' && sp.done >= 2200, T('slow start: logo stays until the first screen is ready'), { midway, sp });
+  await slow.close();
+
+  // Fallback: if the app's script never runs, the logo fades out by itself
+  // and never blocks taps.
+  const broken = await browser.newContext({ ...devices[device] });
+  await broken.route('**/js/app.js', (route) => route.abort());
+  const br = await broken.newPage(); await br.goto(URL1);
+  const tapThrough = await br.evaluate(() => document.elementFromPoint(innerWidth / 2, innerHeight / 2)?.closest('#splash') === null);
+  const before4 = await br.evaluate(() => getComputedStyle(document.getElementById('splash')).opacity);
+  await br.waitForTimeout(4700);
+  const after4 = await br.evaluate(() => { const c = getComputedStyle(document.getElementById('splash')); return [c.opacity, c.visibility]; });
+  ok(before4 === '1' && after4[0] === '0' && after4[1] === 'hidden', T('fallback: logo fades out after 4 s without the script'), { before4, after4 });
+  ok(tapThrough, T('fallback: logo never blocks taps'));
+  await broken.close();
 
   // First install: no message.
   await page.evaluate(() => navigator.serviceWorker.ready);
@@ -903,6 +956,8 @@ async function updateTests(browser, tag, device, errors) {
   await page.waitForSelector('#update-notice[open]', { timeout: 10000 });
   const msg = await page.textContent('#update-notice');
   ok(/Cookbook updated/.test(msg) && /version 99\./.test(msg), T('after updating, a message shows the new version number'), msg.replace(/\s+/g, ' '));
+  const onTop = await page.evaluate(() => { const r = document.querySelector('#update-notice').getBoundingClientRect(); return !!document.elementFromPoint(r.left + r.width / 2, r.top + 20)?.closest('#update-notice'); });
+  ok(onTop, T('the updated message is above the launch logo'));
   const keys = await page.evaluate(() => caches.keys());
   ok(JSON.stringify(keys) === '["cookbook-v99"]', T('new version\'s files are in use (old cache removed)'), keys);
   await page.screenshot({ path: SP + `/${tag}-update-notice.png` });

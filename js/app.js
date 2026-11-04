@@ -1263,23 +1263,25 @@
   }
 
   window.addEventListener('hashchange', route);
-  route().then(revealWhenSettled);
+  route().then(hideSplash);
 
   /**
-   * Show the page (remove "booting", see index.html) once the first screen
-   * has rendered and the browser has drawn two frames at normal zoom. If the
-   * zoom isn't 1 yet, wait for it to settle, but never more than a second.
+   * Launch logo (#splash in index.html). It's part of the page, so it only
+   * shows on a full launch; switching back to an app that's still open
+   * doesn't reload the page, so it doesn't appear then. Fade it out once the
+   * first screen is ready, but not before it has shown for about a second.
    */
-  function revealWhenSettled() {
-    const vv = window.visualViewport;
-    const reveal = () => document.documentElement.classList.remove('booting');
-    const settled = () => !vv || Math.abs(vv.scale - 1) < 0.01;
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (settled()) return reveal();
-      const done = () => { if (settled()) { vv.removeEventListener('resize', done); reveal(); } };
-      vv.addEventListener('resize', done);
-      setTimeout(reveal, 1000);
-    }));
+  const SPLASH_MIN_MS = 1000;
+  function hideSplash() {
+    const splash = document.getElementById('splash');
+    if (!splash) return;
+    setTimeout(() => {
+      splash.classList.add('splash-done');
+      // Remove it once faded (or soon after, if transitions are off).
+      const remove = () => splash.remove();
+      splash.addEventListener('transitionend', remove, { once: true });
+      setTimeout(remove, 600);
+    }, Math.max(0, SPLASH_MIN_MS - performance.now()));
   }
 
   /* ------------------------------------------------------------------ */

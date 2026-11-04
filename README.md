@@ -184,6 +184,18 @@ GitHub Pages serves over HTTPS, which the offline support (service worker) needs
 
 Open the app once while you're online so it can save its files for offline use.
 
+### Launch logo
+
+When the app starts from scratch, it shows its icon in the middle of the
+screen for about a second (longer if the first screen takes longer to load),
+then fades into the app. Switching back to the app while it's still open
+doesn't show it. If something goes wrong it fades out by itself after 4
+seconds, and it never blocks taps.
+
+To change the logo, replace `icons/icon-512.png` (it's the app icon, so a new
+icon set changes it too), or point the `<img>` inside `#splash` in
+`index.html` at another square image. Bump `CACHE_VERSION` afterwards.
+
 > **About storage:** Safari keeps each Home Screen app's data separate from the
 > regular Safari tab. Recipes you add in the Home Screen app appear only there,
 > and recipes you add in a Safari tab appear only in that tab. Deleting the
