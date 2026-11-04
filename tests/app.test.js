@@ -24,6 +24,25 @@ const ok = (cond, msg, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + msg 
 const texts = (page, sel) => page.$$eval(sel, l => l.map(x => x.textContent.replace(/\s+/g, ' ').trim()));
 const cardTitles = (page) => page.$$eval('.card-title', l => l.map(x => x.textContent));
 
+/** On the recipe list, tap + Add and wait for the choice. */
+async function openAddChoice(pg) {
+  if (!/#\/$/.test(pg.url())) { await pg.goto(URL0 + '#/'); }
+  await pg.waitForSelector('#recipe-grid');
+  await pg.click('#header-right button');
+  await pg.waitForSelector('#add-choice[open]');
+}
+/** + Add → Add from file, choosing a file with this name and text. */
+async function addFromFile(pg, name, text, mimeType = '') {
+  await openAddChoice(pg);
+  await pg.setInputFiles('#add-file-input', { name, mimeType, buffer: Buffer.from(text) });
+}
+/** Close "Import complete" and wait for the refreshed list. */
+async function addFromFileDone(pg) {
+  await pg.click('#import-complete button[value=ok]');
+  await pg.waitForSelector('#import-complete', { state: 'detached' });
+  await pg.waitForSelector('.card');
+}
+
 (async () => {
   const browser = await chromium.launch();
   for (const [tag, device] of Object.entries(PROFILES)) {
@@ -185,13 +204,29 @@ async function suite(browser, tag, device) {
   ok(/\.cookbook$/.test(dl.suggestedFilename()) && (await page.textContent('.toast')) === 'Backup downloaded.', 'no share API → downloads .cookbook', dl.suggestedFilename());
   ok(backup.formatVersion === 1 && backup.kind === 'backup' && backup.recipes.length === 4 && backup.tags.includes('Pending tag'), 'backup contents unchanged (JSON, v1, full tag list)');
 
-  // ---------- E. Import: picker, message, counts ----------
-  ok(await page.getAttribute('#import-input', 'accept') === null, 'file picker has no type limit (iOS won\'t grey out .recipe/.cookbook)');
+  // ---------- E. Import: + Add → Add from file, Backup → restore ----------
+  ok(await page.getAttribute('#import-input', 'accept') === null, 'restore picker has no type limit (iOS won\'t grey out .cookbook)');
+  ok((await page.textContent('#view')).includes('Restore from a backup') && (await page.textContent('#view')).includes('Add from file'), 'Backup screen: export + restore, points to + Add for shared recipes');
   const snapshot = () => page.evaluate(async () => JSON.stringify([await DB.getAllRecipes(), await DB.getTagNames()]));
   const importFile = (name, text) => page.setInputFiles('#import-input', { name, mimeType: '', buffer: Buffer.from(text) });
   const clear = () => page.evaluate(() => document.querySelector('#import-result').innerHTML = '');
   const counts = () => page.$$eval('#import-complete [data-count]', l => Object.fromEntries(l.map(d => [d.dataset.count, Number(d.querySelector('dd').textContent)])));
   const before = await snapshot();
+
+  // The + Add choice
+  await openAddChoice(page);
+  ok(JSON.stringify(await texts(page, '#add-choice .btn')) === '["Add manually","Add from file"]', '+ Add offers Add manually and Add from file');
+  ok(await page.getAttribute('#add-file-input', 'accept') === null, 'Add from file has no type limit (iOS won\'t grey out .recipe/.cookbook)');
+  const heights = await page.$$eval('#add-choice .btn, #add-choice .btn-link', l => l.map(b => b.getBoundingClientRect().height));
+  ok(heights.length === 3 && heights.every(h => h >= 44), '+ Add choices are 44px tap targets', heights);
+  await page.screenshot({ path: SP + `/${tag}-add-choice.png` });
+  await page.click('#add-choice button[value=cancel]');
+  await page.waitForSelector('#add-choice', { state: 'detached' });
+  ok(page.url().endsWith('#/'), 'Cancel closes the choice and stays on the list');
+  await openAddChoice(page);
+  await page.click('#add-choice button[value=manual]');
+  await page.waitForSelector('.tag-input');
+  ok(page.url().endsWith('#/new') && !(await page.$('#add-choice')), 'Add manually opens the new recipe form');
 
   const bad = [
     ['broken.recipe', 'not json', "isn't valid JSON"],
@@ -201,31 +236,48 @@ async function suite(browser, tag, device) {
     ['notitle.recipe', JSON.stringify({ ...backup, recipes: [{ ...backup.recipes[0], title: '' }] }), 'has no title'],
   ];
   for (const [name, text, expect] of bad) {
-    await clear(); await importFile(name, text); await page.waitForSelector('#import-result .notice');
-    const msg = await page.textContent('#import-result');
-    ok(msg.includes(expect) && msg.includes('Nothing was changed') && !(await page.$('#import-complete')), `invalid ${name}: error shown, no "Import complete"`, msg.trim().slice(0, 80));
+    await addFromFile(page, name, text);
+    await page.waitForSelector('#import-error[open]');
+    const msg = await page.textContent('#import-error');
+    ok(msg.includes(expect) && msg.includes('Nothing was changed') && !(await page.$('#import-complete')), `Add from file, invalid ${name}: error shown, no "Import complete"`, msg.trim().slice(0, 80));
+    await page.click('#import-error button[value=ok]');
+    await page.waitForSelector('#import-error', { state: 'detached' });
   }
   ok(await snapshot() === before, 'invalid files changed nothing');
+
+  // Backup screen: invalid files and shared recipes are refused there
+  await page.goto(URL0 + '#/backup'); await page.waitForSelector('#import-input');
+  await importFile('broken.cookbook', 'not json'); await page.waitForSelector('#import-result .notice');
+  ok((await page.textContent('#import-result')).includes("isn't valid JSON"), 'restore: invalid file shows an error');
+  await clear(); await importFile('shared.recipe', JSON.stringify({ ...backup, kind: 'share' }));
+  await page.waitForSelector('#import-result .notice');
+  ok((await page.textContent('#import-result')).includes('not a backup') && !(await page.$('dialog[open]')) && await snapshot() === before, 'restore: a .recipe file is pointed to + Add, nothing changed');
 
   await clear(); await importFile('b.cookbook', JSON.stringify(backup));
   await page.waitForSelector('dialog[open]'); await page.keyboard.press('Escape');
   await page.waitForSelector('#import-result .notice');
-  ok((await page.textContent('#import-result')).includes('Import cancelled') && !(await page.$('#import-complete')), 'cancel (Escape): no "Import complete"');
+  ok((await page.textContent('#import-result')).includes('Import cancelled') && !(await page.$('#import-complete')), 'restore cancel (Escape): no "Import complete"');
   await clear(); await importFile('b.cookbook', JSON.stringify(backup));
   await page.waitForSelector('dialog[open]'); await page.click('dialog button[value=cancel]');
   await page.waitForSelector('#import-result .notice');
-  ok((await page.textContent('#import-result')).includes('Import cancelled') && !(await page.$('#import-complete')) && await snapshot() === before, 'Cancel import button: no message, nothing changed');
+  ok((await page.textContent('#import-result')).includes('Import cancelled') && !(await page.$('#import-complete')) && await snapshot() === before, 'restore Cancel import button: no message, nothing changed');
 
-  // Apply-to-all ignore
+  // Apply-to-all ignore (restore)
   await clear(); await importFile('b.cookbook', JSON.stringify(backup));
   await page.waitForSelector('dialog[open]'); await page.check('dialog [name=all]'); await page.click('dialog button[value=ignore]');
   await page.waitForSelector('#import-complete[open]');
-  ok(JSON.stringify(await counts()) === JSON.stringify({ 'Added': 0, 'Overwritten': 0, 'Ignored': 4, 'Renamed with “-new”': 0 }), '.cookbook, all ignored: counts', await counts());
+  ok(JSON.stringify(await counts()) === JSON.stringify({ 'Added': 0, 'Overwritten': 0, 'Ignored': 4, 'Renamed with “-new”': 0 }), '.cookbook restore, all ignored: counts', await counts());
   await page.click('#import-complete button[value=ok]');
   await page.waitForFunction(() => !document.querySelector('#import-complete'));
   ok(true, 'OK closes the message');
 
-  // Mixed .recipe file
+  // Add from file: cancel at the conflict question
+  await addFromFile(page, 'b.cookbook', JSON.stringify(backup));
+  await page.waitForSelector('dialog[open] button[value=cancel]'); await page.click('dialog button[value=cancel]');
+  await page.waitForSelector('.toast:has-text("Import cancelled. Nothing was changed.")');
+  ok(!(await page.$('#import-complete')) && await snapshot() === before, 'Add from file, cancelled: says so, nothing changed');
+
+  // Mixed .recipe file through + Add
   const r = Object.fromEntries(backup.recipes.map(x => [x.id, x]));
   const mixed = { format: 'cookbook-recipes', formatVersion: 1, kind: 'share', recipes: [
     { ...r.r1, title: 'Pancakes v2' },
@@ -234,7 +286,7 @@ async function suite(browser, tag, device) {
     { id: 'w1', title: 'pancakes', mealType: 'snack', tags: ['sweet'], ingredients: [{ id: 'wi1', amount: '1', name: 'pancakes', recipeId: 'r1' }], steps: [] },
     { id: 'w2', title: 'odd overwritten', tags: [], ingredients: [], steps: [] },
   ] };
-  await clear(); await importFile('mixed.recipe', JSON.stringify(mixed));
+  await addFromFile(page, 'mixed.recipe', JSON.stringify(mixed));
   for (const choice of ['keep', 'overwrite', 'ignore']) {
     const d = await page.waitForSelector('dialog[open]');
     await page.click(`dialog button[value=${choice}]`); await d.waitForElementState('hidden');
@@ -245,12 +297,14 @@ async function suite(browser, tag, device) {
   ok(dlgText.includes('Import complete') && dlgText.includes('including 1 kept as a second copy') && dlgText.includes('“pancakes” was imported as “pancakes-new”'), 'message explains copies and lists renames');
   await page.screenshot({ path: SP + `/${tag}-v3-import-complete.png` });
   await page.click('#import-complete button[value=ok]');
+  await page.waitForSelector('.card-title:has-text("pancakes-new")');
+  ok(page.url().endsWith('#/'), 'after Add from file the list shows the new recipes');
   const after = await page.evaluate(() => DB.getAllRecipes());
   const A = Object.fromEntries(after.map(x => [x.id, x]));
   const copy = after.find(x => x.title === 'Pancakes v2');
   ok(after.length === 7 && A.w1.title === 'pancakes-new' && A.w2.title === 'odd overwritten-new' && A.w1.ingredients[0].recipeId === copy.id, 'saved data matches the message (renames, link remap)');
 
-  // Old .json export, and content decides validity regardless of name
+  // Old .json backup restores; + Add takes any valid file whatever its name
   const fresh = await browser.newContext({ ...devices['iPad Pro 11 landscape'] });
   const fp = await fresh.newPage(); fp.on('pageerror', e => errors.push(e.message));
   await fp.goto(URL0 + '#/backup'); await fp.waitForSelector('#import-input');
@@ -258,25 +312,33 @@ async function suite(browser, tag, device) {
   await fp.setInputFiles('#import-input', { name: 'cookbook-backup-2026-11-03.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(oldJson)) });
   await fp.waitForSelector('#import-complete[open]');
   const fc = await fp.$$eval('#import-complete [data-count]', l => Object.fromEntries(l.map(d => [d.dataset.count, Number(d.querySelector('dd').textContent)])));
-  ok(fc.Added === 4 && (await fp.evaluate(() => DB.getTagNames())).includes('Pending tag'), 'old .json backup imports on a fresh iPad', fc);
+  ok(fc.Added === 4 && (await fp.evaluate(() => DB.getTagNames())).includes('Pending tag'), 'old .json backup restores on a fresh iPad', fc);
   await fp.click('#import-complete button[value=ok]');
-  await fp.setInputFiles('#import-input', { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from(JSON.stringify({ ...mixed, recipes: [{ id: 'n1', title: 'From a txt', ingredients: [], steps: [] }] })) });
+  await addFromFile(fp, 'notes.txt', JSON.stringify({ ...mixed, recipes: [{ id: 'n1', title: 'From a txt', ingredients: [], steps: [] }] }), 'text/plain');
   await fp.waitForSelector('#import-complete[open]');
   ok((await fp.evaluate(() => DB.getRecipe('n1'))).title === 'From a txt', 'valid contents import whatever the file name');
-  await fp.click('#import-complete button[value=ok]');
-  await fp.goto(URL0 + '#/tags'); await fp.waitForSelector('#tag-search');
-  await fp.click('[data-tag="sweet"]');
-  await fp.screenshot({ path: SP + `/${tag}-v3-tags-ipad.png` });
-  await fp.click('#show-btn'); await fp.waitForSelector('.card');
-  await fp.screenshot({ path: SP + `/${tag}-v3-list-ipad.png` });
-
+  await addFromFileDone(fp);
   await fresh.close();
+  const fresh2 = await browser.newContext({ ...devices[device] });
+  const fp2 = await fresh2.newPage(); fp2.on('pageerror', e => errors.push(e.message));
+  await addFromFile(fp2, 'cookbook-backup-2026-11-03.json', JSON.stringify(oldJson), 'application/json');
+  await fp2.waitForSelector('#import-complete[open]');
+  ok((await fp2.evaluate(() => DB.getAllRecipes())).length === 4, 'Add from file also takes a .cookbook / older .json backup');
+  await addFromFileDone(fp2);
+  await fresh2.close();
+  await fp.close().catch(() => {});
+  await page.goto(URL0 + '#/tags'); await page.waitForSelector('#tag-search');
+  await page.click('[data-tag="sweet"]');
+  await page.screenshot({ path: SP + `/${tag}-v3-tags-2.png` });
+  await page.click('#show-btn'); await page.waitForSelector('.card');
+  await page.screenshot({ path: SP + `/${tag}-v3-list-2.png` });
 
-  // ---------- F. Offline with cache v5 ----------
+
+  // ---------- F. Offline with cache v6 ----------
   await page.goto(URL0); await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload(); await page.waitForSelector('.card');
   const keys = await page.evaluate(() => caches.keys());
-  ok(JSON.stringify(keys) === '["cookbook-v5"]', 'only cache cookbook-v5', keys);
+  ok(JSON.stringify(keys) === '["cookbook-v6"]', 'only cache cookbook-v6', keys);
   await ctx.setOffline(true);
   for (const h of ['#/', '#/tags', '#/backup', '#/new']) {
     await page.goto(URL0 + h); await page.reload();
@@ -400,9 +462,11 @@ async function linkTests(browser, tag, device, errors) {
 
   // ---- Detail: open a link and go back ----
   await openDetail('#/recipe/rP');
-  const links = await texts(page, '.ing-link span:first-child');
+  const links = await texts(page, '.ing-link');
   ok(JSON.stringify(links) === '["sauce"]', T('only the linked ingredient is a link'), links);
   ok(await tapHeight('.ing-link') >= 44, T('ingredient link is a 44px tap target'));
+  const linkRow = await page.$eval('li.is-linked', li => ({ links: li.querySelectorAll('a').length, kids: li.querySelector('.ing-link').children.length, text: li.textContent }));
+  ok(linkRow.links === 1 && linkRow.kids === 0 && !linkRow.text.includes('›'), T('linked ingredient: the name is the only link, no arrow'), linkRow);
   const lc = await page.$eval('.ing-link', el => [getComputedStyle(el).textDecorationLine, getComputedStyle(el).color]);
   ok(lc[0].includes('underline'), T('ingredient link is underlined'), lc);
   await page.screenshot({ path: SP + `/${tag}-links-detail.png` });
@@ -431,7 +495,7 @@ async function linkTests(browser, tag, device, errors) {
   await openForm('rS');
   await page.fill('input[name=title]', 'Marinara'); await save();
   await openDetail('#/recipe/rP');
-  ok(JSON.stringify(await texts(page, '.ing-link span:first-child')) === '["sauce"]', T('after rename the ingredient keeps its typed name'));
+  ok(JSON.stringify(await texts(page, '.ing-link')) === '["sauce"]', T('after rename the ingredient keeps its typed name'));
   await page.click('.ing-link'); await page.waitForSelector('.detail-title:has-text("Marinara")');
   ok((await page.textContent('.detail-title')) === 'Marinara' && hashNow() === '#/recipe/rS?from=rP', T('after rename the link opens the renamed recipe'));
   await openForm('rP');
@@ -444,7 +508,7 @@ async function linkTests(browser, tag, device, errors) {
   ok(JSON.stringify(await pickerTitles()) === '["Chicken Broth","Marinara"]', T('recipe moved out of Other leaves the picker'), await pickerTitles());
   await page.click('#recipe-picker button[value=cancel]');
   await openDetail('#/recipe/rS');
-  ok((await texts(page, '.ing-link span:first-child')).some(t => t.startsWith('dressing')), T('existing link to it keeps working'));
+  ok((await texts(page, '.ing-link')).some(t => t.startsWith('dressing')), T('existing link to it keeps working'));
 
   // ---- Link to a recipe that isn't on this device ----
   await page.evaluate(async () => { const d = await DB.getRecipe('rD'); d.ingredients[0].recipeId = 'r_elsewhere'; await DB.saveRecipe(d); });
@@ -467,10 +531,9 @@ async function linkTests(browser, tag, device, errors) {
 
   const other = await browser.newContext({ ...devices[device] });
   const op = await other.newPage(); op.on('pageerror', e => errors.push(e.message));
-  await op.goto(URL0 + '#/backup'); await op.waitForSelector('#import-input');
+  await op.goto(URL0); await op.waitForSelector('#recipe-grid');
   const imp = async (name, data, choice) => {
-    await op.goto(URL0 + '#/backup'); await op.waitForSelector('#import-input');
-    await op.setInputFiles('#import-input', { name, mimeType: '', buffer: Buffer.from(JSON.stringify(data)) });
+    await addFromFile(op, name, JSON.stringify(data));
     if (choice) { await op.waitForSelector('dialog[open] [name=all]'); await op.check('dialog [name=all]'); await op.click(`dialog button[value=${choice}]`); }
     await op.waitForSelector('#import-complete[open]'); await op.click('#import-complete button[value=ok]');
     await op.waitForSelector('#import-complete', { state: 'detached' });

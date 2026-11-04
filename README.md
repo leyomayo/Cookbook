@@ -11,13 +11,14 @@ IndexedDB storage. No servers, no accounts, no cloud services.
 
 - **Recipe list** with a meal type filter (All, Breakfast, Lunch, Snack, Dinner, Other).
   Tap **Tags** under it to filter by tag as well.
+- **+ Add** (top right of the recipe list): **Add manually** or **Add from file**
 - **Add / edit form**: title, meal type, prep time, cook time, servings, tags,
   an ingredient list, and numbered directions you can reorder
 - **Recipe detail** page. On iPad the ingredients and directions sit side by side.
 - **Tag list** that starts with 46 common tags and grows as you add your own
 - **Recipe links**: an ingredient can link to a recipe in the Other category,
   so a homemade sauce or broth opens its own recipe
-- **Backup, sharing and import** of recipe files
+- **Backup, sharing and adding from a file**
 
 ## Tags
 
@@ -55,8 +56,8 @@ first.
 - A linked row shows **Links to** and the recipe's name. Tap **Unlink** to make it plain
   text again (the name stays). Links move with their row and are saved with
   the recipe.
-- On the recipe page a linked ingredient is underlined with a **›**. Tap it to
-  open that recipe. **Back** returns to the recipe you came from, even after a
+- On the recipe page a linked ingredient's name is underlined in the accent
+  color. Tap the name to open that recipe. **Back** returns to the recipe you came from, even after a
   reload or an edit.
 
 How links behave:
@@ -76,7 +77,19 @@ How links behave:
   recipe whose linked recipe you didn't import), the ingredient shows as plain
   text. The link is kept, so it works again if you import that recipe later.
 
-## Backup, sharing and import
+## Backup, sharing and adding from a file
+
+### Adding recipes from a file
+
+Tap **+ Add** on the recipe list, then **Add from file**. It takes a shared
+recipe (`.recipe`), a backup (`.cookbook`), or an older `.json` export. To add
+a file someone sent you, save it to Files first, then pick it here. The
+picker doesn't limit file types (otherwise iOS greys out `.recipe` and
+`.cookbook` files); the app checks the file's contents. If the file can't be
+added, a message says why, and nothing changes. **Add manually** opens the
+new recipe form.
+
+### Backup screen
 
 Open **Backup** (top left of the recipe list).
 
@@ -88,12 +101,11 @@ Open **Backup** (top left of the recipe list).
   to keep a backup, or AirDrop, Messages or Mail to send it. On a computer the
   file downloads. If the share sheet won't take the file, the app downloads it
   instead and tells you.
-- **Choose file…** imports a `.cookbook` backup, a `.recipe` file, or an older
-  `.json` export. To import a file someone sent you, save it to Files first,
-  then pick it here. The picker doesn't limit file types (otherwise iOS greys
-  out `.recipe` and `.cookbook` files); the app checks the file's contents.
+- **Restore from a backup → Choose backup…** adds the recipes and tags from a
+  `.cookbook` backup (or an older `.json` backup). A shared `.recipe` file is
+  refused here with a pointer to **+ Add → Add from file**.
 
-When importing:
+When adding from a file or restoring (both work the same way):
 
 - If anything in the file is invalid, you see an error and nothing changes.
 - If a recipe in the file is already in your cookbook (same id), you choose
@@ -139,7 +151,7 @@ Open the app once while you're online so it can save its files for offline use.
 > and recipes you add in a Safari tab appear only in that tab. Deleting the
 > Home Screen icon may also delete its recipes, so keep a backup (see above).
 > To move recipes from a Safari tab into the Home Screen app, export a backup
-> in the tab and import it in the app.
+> in the tab and restore it in the app (Backup → Restore from a backup).
 
 ## Updating the app
 
